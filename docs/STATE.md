@@ -257,16 +257,14 @@ Last updated: 2026-10-27
 - Pruning of old snapshots (7 days, `tools/publish.py`) and of packages no snapshot names: with hosting, after M5.
 
 ## Open questions (owner)
-- **Legal (ask the owner; never settled by an agent):** may the Store's category names follow the Mac App Store's own list
-  ("Graphics & Design", "Photo & Video", "Developer Tools"), or stay neutral? The catalog uses neutral names until the owner
-  decides; "Productivity", "Games", "Education" and "Utilities" are common to most stores but are in that list too. The
-  section and category names and the publishers' icons need the M5 legal review before any publication (ST10).
-- **Legal (integrator, PR #6's merge; the owner chooses):** the sections Discover, Create, Work, Play, Develop are exactly
-  the Mac App Store's sidebar. Options, for the M5 review: (a) keep them (closest to macOS 27; the risk is the copied
-  structure); (b) neutral words with the same roles: "Featured", "Creativity", "Productivity", "Games", "Development";
-  (c) Grassfield's own: "Discover", "Make", "Office", "Fun", "Code". The section ids stay, only the titles change (each
-  file's `title`, en and fr). Nothing is published before M5, so this blocks nothing now (grassfield
-  `docs/legal/visual-review.md` E36, question 12).
+- None for the catalog. The owner's decisions of 2026-10-27 (legal review with the integrator, recorded on grassfield PR
+  #25 and in grassfield ADR-0037 e.10; the full list in grassfield's legal dossier) settle the two questions that were
+  here:
+  - the section names stay as they are (Discover, Create, Work, Play, Develop): a risk the owner accepts;
+  - the category names stay the neutral ones;
+  - publishers' icons, screenshots and AppStream texts are shown as provided, with their source;
+  - the app name "Grassfield Store" and "Get" / "Open" stay, with the macOS command labels.
+  Publication still waits for the owner's decision after the M5 legal review (CLAUDE.md).
 
 ## Owner steps before publishing is enabled
 - Create the `publish-stable` and `publish-beta` environments with required reviewers (the owner approves each run) and
