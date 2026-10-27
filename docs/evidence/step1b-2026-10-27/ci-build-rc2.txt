@@ -1,0 +1,49 @@
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-11-10
+
+== the package set of an Omarchy stable machine (build/pacman.conf)
+
+== grassfield at v1.0.0-rc2
+commit 5ac44f903180f67f4dcf0c4b0d945b689131499d, VERSION 1.0.0-rc2, packages 1.0.0rc2-3, channels beta
+
+== grassfield-keyring
+trust anchor: this ref pins no key yet (owner decision O11): nothing to check
+
+== makepkg (grassfield's packaging/arch/PKGBUILD)
+grassfield-compositor-1.0.0rc2-3-x86_64.pkg.tar.zst
+grassfield-desktop-1.0.0rc2-3-x86_64.pkg.tar.zst
+grassfield-icons-1.0.0rc2-3-any.pkg.tar.zst
+grassfield-keyring-20261027-1-any.pkg.tar.zst
+
+== the release builds
+beta: release build 1.0.0rc2-3 (1.0.0rc2-3 1.0.0rc1-3 in its notes)
+
+== the channels
+beta: snapshot 20261027T101810Z-96072912ad8e (grassfield-desktop 1.0.0rc2-3)
+done: beta:20261027T101810Z-96072912ad8e
+PASS: no symbolic link in the tree
+PASS: beta 20261027T101810Z-96072912ad8e: manifest.json names every file with its SHA-256
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield.db signed
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield.files signed
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield-notes.json signed
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield-compositor-1.0.0rc2-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield-desktop-1.0.0rc2-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield-icons-1.0.0rc2-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T101810Z-96072912ad8e: grassfield-keyring-20261027-1-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T101810Z-96072912ad8e: every package is named grassfield-*
+PASS: beta 20261027T101810Z-96072912ad8e: no package declares replaces=
+PASS: beta 20261027T101810Z-96072912ad8e: notes valid, newest release 1.0.0rc2-3
+PASS: release build beta/1.0.0rc2-3: grassfield.db signed
+PASS: release build beta/1.0.0rc2-3: grassfield.files signed
+PASS: release build beta/1.0.0rc2-3: grassfield-notes.json signed
+PASS: release build beta/1.0.0rc2-3: grassfield-compositor-1.0.0rc2-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc2-3: grassfield-desktop-1.0.0rc2-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc2-3: grassfield-icons-1.0.0rc2-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc2-3: grassfield-keyring-20261027-1-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc2-3: every package is named grassfield-*
+PASS: release build beta/1.0.0rc2-3: no package declares replaces=
+PASS: release build beta/1.0.0rc2-3: notes valid, newest release 1.0.0rc2-3
+check-tree: 0 failure(s)
+build job exit 0

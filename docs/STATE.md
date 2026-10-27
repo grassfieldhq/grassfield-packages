@@ -24,14 +24,24 @@ Last updated: 2026-10-27
   - `keyring/`: grassfield-keyring, files in `/usr/share/grassfield/pacman-keyring/`, populate-from only with keys and only
     while `/etc/pacman.d/grassfield.conf` exists, `pre_remove` deletes its trusted keys; NO KEY until O11 (empty files).
   - `build/pacman.conf`: Omarchy's stable mirror (Hyprland 0.56.2-4, quickshell 0.3.2-1, Qt 6.11.2, KF6 6.31 in [extra]).
-  - `scripts/build-channel.sh` (grassfield's own PKGBUILD, keyring built first and once per version, names and replaces
-    checked, packages, databases and notes signed, the release build, immutable package names, never a package older than
-    the current snapshot's, snapshot + pointer, build record), `notes.py`, `check-tree.sh`, `sign-release.sh`,
-    `rollback.sh`, `view.sh`, `serve.py`.
-  - `.github/workflows/`: build (workflow_dispatch: build with a throwaway key, check-tree, artifact; test: smoke.sh;
-    release, `if: false`: a tag's tested release builds signed with the project's key by `scripts/sign-release.sh` and
-    kept beside the channels for the publisher), poll (every 15 min, off until `GRASSFIELD_TAG_POLL=on`), watch-hyprland
-    (by hand only). Not run: no deploy key exists, and nothing may be published.
+  - `scripts/build-channel.sh`:
+    - grassfield's own PKGBUILD, keyring built first and once per version;
+    - names and `replaces=` checked; packages, databases and notes signed with throwaway keys only (it refuses to start
+      beside the project's key);
+    - the release build; immutable package names; never a package older than the current snapshot's;
+    - snapshot and pointer in the publisher's format (`snapshot.py`); the build record.
+    Beside it: `notes.py`, `check-tree.sh` (`--trusted`), `sign-release.sh`, `snapshot.py`, `rollback.sh` (withdraws the
+    newer release builds), `view.sh`, `serve.py`.
+  - `.github/workflows/`, every action pinned to a commit SHA. Not run: no deploy key exists, and nothing may be
+    published.
+    - build (workflow_dispatch, a tag or a pkgrel rebuild):
+      - build: a throwaway key, check-tree, the artifact;
+      - test: smoke.sh;
+      - release, `if: false`, per channel in the publisher's environments `publish-<channel>`: the tested release build
+        signed with the project's key in a container that runs no build, checked with `check-tree --trusted`, and kept
+        under `releases/` (never replaced, its database last).
+    - poll: every 15 min, off until `GRASSFIELD_TAG_POLL=on`.
+    - watch-hyprland: by hand only.
   - Publication: the one serialized publisher per channel is Grassfield Store step 1's (ADR-0037 g and its Consequences;
     PR #2's `publish.yml` and `tools/publish.py`). This PR's own `publish.yml` (written while resolving the conflict with
     PR #1) rebuilt each tag at publication, against ADR-0037 g ("each tag is built once", its packages, databases and notes
@@ -40,22 +50,48 @@ Last updated: 2026-10-27
     release alone, notes with the channel's earlier releases from the tag's own tags, grassfield-keyring built once per
     version), the layout `tools/publish.py --releases` reads, and makes the test tree's snapshots from it as the
     publisher does.
-  - Tests (outputs in `docs/evidence/step1b-2026-10-27/`):
-    - `tests/e2e.sh` with the REAL packages built three times (1.0.0, 1.0.1, 1.1.0-beta1 of grassfield's step 1 client):
-      exit 0, 72 PASS, 0 FAIL (first installation per ADR-0033 b.3a, Set Up through real pkexec, updates seen with
-      verified notes and installed, rogue database, packages and notes refused, beta and back without a downgrade,
-      rollback over HTTP by a new snapshot, removal, the keyless keyring trusting nothing);
-    - the build job's script and `tests/smoke.sh` (the CI path, run locally): build exit 0, check-tree 0 failures, smoke
-      0 failures; a ref without release notes is refused.
+  - After the integrator's opus review of e373590 (FAIL: 1 BLOCKER, 5 MAJOR, minors; integrator decision: PR #2 merges
+    first, then this branch merges main and makes its `tools/publish.py` the only publisher):
+    - B1: the test tree uses the publisher's format: pointer `{"snapshot": "<id>"}` and `manifest.json`. The catalog is
+      kept in each new snapshot. The release job uses the `publish-<channel>` environments. Nothing is rebuilt at
+      publication.
+    - M1: the project's key never meets a build.
+    - M2: a stored release build is never replaced; a published package is used as it is (the counter-case is refused by
+      `tools/publish.py`).
+    - M3: a rollback withdraws the newer release builds.
+    - M4: `check-tree --trusted`.
+    - M5: the pkgrel path is fixed and tested end to end.
+    - Minors: actions pinned and credentials per step; stronger assertions, and a skip in CI fails; `--to` validated;
+      the evidence re-recorded with its commits.
+  - Tests on 3a6a138, grassfield main ae121e8 (outputs and commands in `docs/evidence/step1b-2026-10-27/`):
+    - `tests/e2e.sh` with the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): in progress at this commit, recorded with the next.
+      It covers:
+      - the first installation per ADR-0033 b.3a, and Set Up through real pkexec;
+      - updates seen with verified notes and installed, and the pkgrel rebuild's note;
+      - a rogue database, packages and notes refused;
+      - beta and back without a downgrade;
+      - a rollback over HTTP by a new snapshot, with the newer release builds withdrawn;
+      - removal, and the keyless keyring trusting nothing;
+    - `tests/release-build.sh`: exit 0, 17 checks, 0 FAIL;
+    - the CI path, run locally (build job's inline script and `tests/smoke.sh`, v1.0.0-rc1 and v1.0.0-rc2 in fresh
+      trees): exit 0, 0 failures each;
+    - interface with PR #2's `tools/publish.py` (e05f23e, unmerged): the release builds signed and published, a client
+      installing rc1 then rc2; without `--published` the publisher refuses: exit 0, 15 checks, 0 FAIL;
+    - gitleaks v8.18.4 on origin/main..HEAD and on the tree: no leaks found.
   - The first clean builds found two gaps in grassfield's PKGBUILD makedepends, fixed in grassfield #16 (8509be8, 0338116).
 
 ## Tests run
-- Store step 0: none (docs only). Software Update step 1b: see its entry above (end-to-end 72 PASS, the CI path).
+- Store step 0: none (docs only). Software Update step 1b: see its entry above (end-to-end, release-build, the CI path,
+  the interface with PR #2's publisher).
 
 ## Open
-- From the owner, later: `GRASSFIELD_DEPLOY_KEY`, then `GRASSFIELD_TAG_POLL=on`; the `release` environment and its
-  secrets (signing key and passphrase, S3 keys) and variables (bucket, endpoint); the public key and fingerprint; the host.
+- From the owner, later: `GRASSFIELD_DEPLOY_KEY`, then `GRASSFIELD_TAG_POLL=on`; the publisher's environments
+  `publish-stable` and `publish-beta` and their secrets (signing key and passphrase, S3 keys) and variables (bucket,
+  endpoint); the public key and fingerprint; the host.
 - The workflows have never run on GitHub (they need the deploy key); their steps ran locally only through the scripts.
+- After PR #2 merges (integrator decision): merge main here; its `tools/publish.py` replaces `snapshot.py write` in
+  `build-channel.sh` and `rollback.sh`; its `publish.yml` reads `releases/<channel>/` from the storage. A deliberate
+  rollback (ADR-0033 h.2) is still outside the publisher, which refuses an older database.
 - Pruning of old snapshots (7 days) and of packages no snapshot names: with hosting, after M5.
 
 ## Next
@@ -63,5 +99,4 @@ Last updated: 2026-10-27
   one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21); step 2 (the pane) in grassfield after
   its Settings PRs #8-#10.
 - Grassfield Store step 1 (ADR-0037, PR #2): the catalog and the one serialized publisher per channel (`publish.yml`,
-  `tools/publish.py`), which reads PR #3's release builds; whichever merges second aligns the two (its pointer is JSON,
-  this repository's test tools read a bare id).
+  `tools/publish.py`), which reads PR #3's release builds; PR #2 merges first, then PR #3 merges main (integrator).
