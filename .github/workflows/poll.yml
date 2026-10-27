@@ -1,0 +1,39 @@
+# Builds every new grassfield tag once (owner decision O14: a poll of the tags every 15 minutes, plus manual runs of the
+# build workflow). OFF until the owner sets the repository variable GRASSFIELD_TAG_POLL to "on", once the secret
+# GRASSFIELD_DEPLOY_KEY exists (O13): a job skipped by its `if` starts no runner. GitHub may start scheduled runs late.
+# A tag is built once: one whose "build <tag>" run exists (whatever its result) is not started again; rerun it by hand.
+name: poll grassfield tags
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+permissions:
+  actions: write
+  contents: read
+jobs:
+  poll:
+    if: vars.GRASSFIELD_TAG_POLL == 'on'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Start the build of each tag not built yet
+        env:
+          DEPLOY_KEY: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_KEY" ] || { echo "::error::GRASSFIELD_DEPLOY_KEY is not set"; exit 1; }
+          mkdir -p ~/.ssh
+          # GitHub's published SSH host key, not trusted on first use.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' >~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          printf '%s\n' "$DEPLOY_KEY" | ssh-add -
+          tags=$(git ls-remote --tags --refs git@github.com:grassfieldhq/grassfield.git | awk '{ sub("refs/tags/", "", $2); print $2 }' |
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?$' || true)
+          built=$(gh run list --workflow build.yml --limit 1000 --json displayTitle -q '.[].displayTitle')
+          for t in $tags; do
+            grep -qxF "build $t" <<<"$built" && continue
+            echo "new tag $t: starting its build"
+            gh workflow run build.yml -f ref="$t"
+          done

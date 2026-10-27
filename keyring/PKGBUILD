@@ -1,0 +1,31 @@
+# grassfield-keyring: the keys pacman trusts for Grassfield's [grassfield] repository (grassfield ADR-0033 b.2, b.4, b.8;
+# owner decisions O12 and O20). grassfield-desktop depends on it, as omarchy depends on omarchy-keyring.
+#
+# Its files live in Grassfield's private folder /usr/share/grassfield/pacman-keyring/, not in /usr/share/pacman/keyrings/:
+# a plain `pacman-key --populate` (run by a person or by another keyring's install) never trusts them again after
+# "Turn Off Grassfield Updates…" deleted them (ADR-0033 R2). Only `pacman-key --populate-from` that folder trusts them:
+# this package's install script while Grassfield updates are on, and grassfield-channel-helper's `set`.
+#
+# NO KEY UNTIL THE OWNER PROVIDES THE PROJECT'S SIGNING KEY (O11, O20): grassfield.gpg, grassfield-trusted and
+# grassfield-revoked are empty, so the package installs and trusts nothing (R1). Test keys are generated inside the
+# throwaway test containers at each run, never committed, never installed elsewhere. When the key exists: its public key
+# goes in grassfield.gpg, "<FINGERPRINT>:4:" in grassfield-trusted, pkgver becomes the date, and `updpkgsums`.
+# A rotation adds the new key while the old one still signs and moves the old one to grassfield-revoked only after the
+# overlap of ADR-0033 b.4.
+pkgname=grassfield-keyring
+pkgver=20261027
+pkgrel=1
+pkgdesc="Grassfield's package signing keys for pacman (none until the project's signing key exists)"
+arch=(any)
+url="https://grassfield.invalid"
+license=(MIT)
+install=grassfield-keyring.install
+source=(grassfield.gpg grassfield-trusted grassfield-revoked)
+sha256sums=('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+options=(!debug !strip)
+
+package() {
+  install -Dm644 -t "$pkgdir/usr/share/grassfield/pacman-keyring" grassfield.gpg grassfield-trusted grassfield-revoked
+}

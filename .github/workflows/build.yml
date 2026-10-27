@@ -1,0 +1,193 @@
+# Build one Grassfield tag (or commit) once: its release build for each channel it goes to and a channel tree made from
+# them, as a CI artifact (grassfield ADR-0033 e-h; ADR-0037 g). NOTHING IS PUBLISHED: build and test sign with a throwaway
+# key made in the job (ADR-0033 b.7), so the artifact is for review and tests only, never for clients; it carries the
+# keyless grassfield-keyring (U23) until the owner's key exists. The release job, written and disabled until the owner
+# decides after the M5 legal review (owner decision 2026-10-27), signs a tag's tested release builds with the project's key
+# and keeps them where the channel's one serialized publisher reads them (ADR-0037 g; publish.yml, which starts when this
+# workflow completes).
+#
+# From the owner, later (none exists; the agent creates none): the secret GRASSFIELD_DEPLOY_KEY, a read-only deploy key of
+# grassfieldhq/grassfield (O13), without which the build stops at its first step; for the release job, the publisher's
+# protected environments publish-stable and publish-beta (the owner approves each run) with the secrets
+# GRASSFIELD_SIGNING_KEY (armored secret key), GRASSFIELD_SIGNING_PASSPHRASE (O6), GRASSFIELD_S3_ACCESS_KEY_ID,
+# GRASSFIELD_S3_SECRET_ACCESS_KEY and the variables GRASSFIELD_S3_BUCKET, GRASSFIELD_S3_ENDPOINT (O8).
+name: build
+run-name: build ${{ inputs.ref }}${{ inputs.pkgrel && format(' pkgrel {0}', inputs.pkgrel) || '' }}
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: grassfield tag (vX.Y.Z, vX.Y.Z-betaN, vX.Y.Z-rcN) or commit
+        required: true
+      pkgrel:
+        description: a rebuild of the tag for a new Hyprland (ADR-0033 f, O7), the pkgrel above the published one; empty otherwise
+        required: false
+        default: ""
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ inputs.ref }}-${{ inputs.pkgrel }}
+env:
+  IMAGE: archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: The deploy key exists
+        env:
+          DEPLOY_KEY: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+        run: |
+          [ -n "$DEPLOY_KEY" ] || { echo "::error::GRASSFIELD_DEPLOY_KEY is not set (owner decision O13): nothing to build"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: packages
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: grassfieldhq/grassfield
+          ssh-key: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: grassfield
+      - name: Build in a throwaway Arch container with Omarchy stable's package set, signed by a throwaway key
+        env:
+          REF: ${{ inputs.ref }}
+          PKGREL: ${{ inputs.pkgrel }}
+        run: |
+          mkdir -p out
+          docker run --rm -e REF -e PKGREL -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/out:/out" \
+            "$IMAGE" bash -euo pipefail -c '
+              trap "cp /build/build.log /out/build.log 2>/dev/null || true" EXIT
+              export GNUPGHOME=$(mktemp -d)
+              gpg --batch --pinentry-mode loopback --passphrase "" \
+                --quick-gen-key "Grassfield CI build (throwaway) <ci@grassfield.invalid>" ed25519 sign 14d 2>/dev/null
+              key=$(gpg --with-colons --list-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
+              /packages/scripts/build-channel.sh --source /grassfield --ref "$REF" --tree /out/tree \
+                --gnupghome "$GNUPGHOME" --key "$key" ${PKGREL:+--pkgrel "$PKGREL"}
+              gpg --export "$key" >/out/build-signing-key.gpg
+              /packages/scripts/check-tree.sh --tree /out/tree --keyring /out/build-signing-key.gpg'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: grassfield-channel-${{ github.run_id }}
+          path: out
+          retention-days: 14
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: packages
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grassfield-channel-${{ github.run_id }}
+          path: out
+      - name: A fresh Omarchy stable machine installs the built packages; the client answers
+        run: |
+          docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/out:/out:ro" "$IMAGE" \
+            bash /packages/tests/smoke.sh --tree /out/tree --keyring /out/build-signing-key.gpg
+
+  release:
+    # DISABLED: the owner removes `if: false` once the environments exist (tags only: startsWith(inputs.ref, 'v')).
+    # It holds no build: it receives the tested artifact. Three containers, so that the key never meets anything that
+    # reads package contents (review M1: repo-add evaluates .PKGINFO lines): prepare (no key: published packages,
+    # keyring/ compared, repo-add), sign (the key, gpg only, on an allowlist of names, no network), check (no key: as a
+    # client checks it, the folder's exact contents, the keyring byte for byte keyring/'s). Only then is it uploaded.
+    if: false
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, beta]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The publisher's environments (publish.yml): protected, the owner approves each run; each holds that channel's key
+    # and storage credentials. None exists today.
+    environment: publish-${{ matrix.channel }}
+    env:
+      CHANNEL: ${{ matrix.channel }}
+      BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
+      ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: packages
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grassfield-channel-${{ github.run_id }}
+          path: out
+      - name: This channel's release build, none stored yet (each tag is built once), and the published packages of its names
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          # Exact keys (review minor 1): 0 present, 1 absent (404), any other answer stops the job.
+          exists() {
+            local err
+            if err=$(aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$1" 2>&1 >/dev/null); then return 0; fi
+            if grep -qE '\(404\)|Not Found' <<<"$err"; then return 1; fi
+            echo "::error::$1: $err"; exit 1
+          }
+          rel=$(ls -d out/tree/releases/"$CHANNEL"/*/ 2>/dev/null | head -n 1) || true
+          [ -n "$rel" ] || { echo "this tag does not go to $CHANNEL"; exit 0; }
+          rel=${rel%/} v=$(basename "$rel")
+          for k in "releases/$CHANNEL/$v/grassfield.db" "withdrawn/$CHANNEL/$v/grassfield.db"; do
+            if exists "$k"; then echo "$k is stored already: a release build is never replaced"; exit 0; fi
+          done
+          echo "REL=$rel" >>"$GITHUB_ENV"
+          # A package file name never changes content: one already published is used as it is (grassfield-keyring).
+          mkdir published
+          for f in "$rel"/*.pkg.tar.zst; do
+            b=$(basename "$f")
+            if exists "$CHANNEL/x86_64/$b"; then
+              aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/$b" published/
+              aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/$b.sig" published/
+            fi
+          done
+      - name: Prepared without the key (the published packages, keyring/ compared, repo-add)
+        if: env.REL != ''
+        run: |
+          docker run --rm --network none -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release" \
+            -v "$PWD/published:/published:ro" "$IMAGE" \
+            /packages/scripts/sign-release.sh prepare --release /release --keyring /packages/keyring --published /published
+      - name: Signed with the project's key (only this container sees it; gpg only, on an allowlist of names)
+        if: env.REL != ''
+        env:
+          GRASSFIELD_SIGNING_KEY: ${{ secrets.GRASSFIELD_SIGNING_KEY }}
+          GRASSFIELD_SIGNING_PASSPHRASE: ${{ secrets.GRASSFIELD_SIGNING_PASSPHRASE }}
+        run: |
+          docker run --rm --network none -e GRASSFIELD_SIGNING_KEY -e GRASSFIELD_SIGNING_PASSPHRASE \
+            -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release" "$IMAGE" bash -euo pipefail -c '
+              export GNUPGHOME=$(mktemp -d)
+              printf "%s" "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+                --import <(printf "%s\n" "$GRASSFIELD_SIGNING_KEY")
+              key=$(gpg --with-colons --list-secret-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
+              /packages/scripts/sign-release.sh sign --release /release --gnupghome "$GNUPGHOME" --key "$key"'
+      # Until grassfield-keyring holds the project's key (O11), this refuses every release build: nothing can be signed
+      # for clients before the keyring that trusts the key.
+      - name: Checked as a client checks it, without the key (signatures, exact contents, keyring/ byte for byte)
+        if: env.REL != ''
+        run: |
+          docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release:ro" "$IMAGE" bash -euo pipefail -c '
+            install -m644 /packages/build/pacman.conf /etc/pacman.conf
+            { pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm --needed python; } >/dev/null
+            mkdir -p "/tmp/t/releases/$0" && cp -r /release "/tmp/t/releases/$0/$(basename "$1")"
+            /packages/scripts/check-tree.sh --tree /tmp/t --trusted --keyring-src /packages/keyring' "$CHANNEL" "$REL"
+      - name: Kept beside the channels, never under a pointer, its database last (the publisher reads a complete one)
+        if: env.REL != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          dest=s3://$BUCKET/releases/$CHANNEL/$(basename "$REL")
+          aws --endpoint-url "$ENDPOINT" s3 cp --recursive --exclude 'grassfield.db' "$REL/" "$dest/"
+          aws --endpoint-url "$ENDPOINT" s3 cp "$REL/grassfield.db" "$dest/grassfield.db"

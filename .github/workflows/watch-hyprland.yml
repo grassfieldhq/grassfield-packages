@@ -1,0 +1,33 @@
+# ADR-0033 f: when Omarchy moves Hyprland, the plugin of the published channel no longer matches (ADR-0009 degraded mode
+# meanwhile). This compares the Hyprland of Omarchy's stable and rc mirrors with the one a channel was built for (the
+# "hyprland" line of its build-*.txt) and says whether a rebuild with pkgrel + 1 is due (build workflow, then
+# build-channel.sh --pkgrel). DISABLED while nothing is published: no schedule and no published channel to read; it runs
+# only by hand. Once publishing starts, a schedule and the read of the published build-*.txt are added here.
+name: watch Hyprland
+on:
+  workflow_dispatch:
+    inputs:
+      built:
+        description: the Hyprland version the channel was built against (pkgver-pkgrel, from build-*.txt)
+        required: true
+permissions:
+  contents: read
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Hyprland on Omarchy's stable and rc mirrors
+        env:
+          BUILT: ${{ inputs.built }}
+        run: |
+          set -euo pipefail
+          for m in stable-mirror rc-mirror; do
+            v=$(curl -fsSL "https://$m.omarchy.org/extra/os/x86_64/extra.db" |
+              tar -xzO --wildcards 'hyprland-[0-9]*/desc' | awk '/^%VERSION%$/ { getline; print; exit }')
+            if [ "$v" = "$BUILT" ]; then
+              echo "$m: hyprland $v, the channel's build: nothing to do"
+            else
+              echo "::warning::$m: hyprland $v, the channel was built for $BUILT: rebuild with pkgrel + 1 once it reaches stable"
+            fi
+          done

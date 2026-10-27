@@ -8,7 +8,9 @@
 # Its own workflow, so that neither a pull request nor a manual dispatch from another branch ever starts it (catalog.yml
 # checks those; ADR-0033 b.7: the key is used by the signing and publishing jobs only, never on a pull_request), and
 # every publishing run of a channel, whatever started it, waits in that channel's one concurrency group: a change on
-# main, or a release build of ADR-0033 (its own step; it will start this workflow with workflow_run when it exists).
+# main, or a release build of ADR-0033 (build.yml: its release job keeps a tag's signed release builds under
+# releases/<channel>/ in the bucket, then this workflow starts when the build workflow completes, workflow_run). When it
+# is enabled, the job's condition becomes: a push, or a build workflow that succeeded.
 # GitHub runs one at a time, never cancels the running one (cancel-in-progress: false) and cancels a waiting run when a
 # newer one queues. So a run takes nothing from its trigger and publishes the latest state: the catalog built from
 # main's head as it is when the run starts, and the newest release built and signed for the channel; tools/publish.py
@@ -18,6 +20,9 @@ name: publish
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: [build]
+    types: [completed]
 
 permissions:
   contents: read
@@ -65,8 +70,12 @@ jobs:
           python3 -I tools/catalog.py build --channel "${{ matrix.channel }}" --serial "$(date -u +%s)" --out /tmp/catalog
 
       # Then, once the owner decides: sign /tmp/catalog/grassfield-catalog.v1.json with the owner's key from this
-      # environment (catalog.py sign), and run
-      #   tools/publish.py --store <the bucket> --channel <channel> --releases <the release builds>
+      # environment (catalog.py sign); fetch the channel's release builds, releases/<channel>/ in the bucket (build.yml's
+      # release job keeps each tag's there, signed and checked, its database last; a rollback moves withdrawn ones to
+      # withdrawn/<channel>/), into /tmp/releases; and run
+      #   tools/publish.py --store <the bucket> --channel <channel> --releases /tmp/releases
       #                    --keyring-dir <grassfield-keyring's files> --catalog /tmp/catalog
-      # which checks every release file's signature and the catalog as the Store does before it publishes anything.
-      # The bucket's backend waits for the host.
+      # which checks every release file's signature and the catalog as the Store does, and publishes the newest release
+      # build when it is newer than the snapshot's, never an older database. The bucket's backend waits for the host.
+      # ADR-0033 h.2's deliberate rollback is the owner's, by hand in this concurrency group (scripts/rollback.sh:
+      # tools/publish.py --rollback-to).

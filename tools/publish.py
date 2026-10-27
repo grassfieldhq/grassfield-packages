@@ -4,6 +4,7 @@ until the owner decides, after the M5 legal review (CLAUDE.md). Standard library
 
   publish.py --store DIR --channel stable [--arch x86_64] --releases DIR --keyring-dir DIR [--catalog DIR]
              [--keep-days 7]
+  publish.py --store DIR --channel stable [--arch x86_64] --keyring-dir DIR --rollback-to SNAPSHOT
 
 One run publishes the latest state, never what started it (GitHub cancels a waiting run when a newer one queues, and each
 tag is built once): the newest release built and signed for the channel (--releases holds one folder per version, as each
@@ -15,7 +16,9 @@ tag's build left it) and the catalog built from main's head (--catalog). It
      grassfield-revoked does not, and the catalog must pass the Store's own checks for this channel (tools/catalog.py
      verify: that signature, the rules, the icons); only the icons it lists are uploaded;
   3. refuses to go backwards: a grassfield.db naming an older version of a package than the current one, an older release
-     or a lower serial are never published (a rollback is a new release, ADR-0033 h.2);
+     or a lower serial are never published, except ADR-0033 h.2's deliberate rollback (--rollback-to: a new snapshot with
+     an older snapshot's databases and notes, the rest kept; scripts/rollback.sh withdraws the newer release builds
+     first, so that the next run does not publish them again);
   4. uploads the files with immutable names (packages, icons) once, then the snapshot, then writes the pointer only if it
      still names the snapshot step 1 read (compare-and-swap); otherwise it discards its snapshot and starts again.
 Storage: `LocalStore`, a directory laid out as the bucket will be (ADR-0033 h: <channel>/<arch>/, snap/<id>/, pointer).
@@ -44,6 +47,7 @@ CATALOG_FILE = "grassfield-catalog.v1.json"
 PACKAGE_FILE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]*\.pkg\.tar\.(zst|xz|gz)(\.sig)?$")
 VERSION_DIR = re.compile(r"^[A-Za-z0-9._+:~-]{1,64}$")
 ATTEMPTS = 5
+SNAPSHOT_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
 
 
 class Refused(Exception):
@@ -211,7 +215,8 @@ def plan(store, current, releases, catalog, keyring_dir=None):
                 for name, was in old_db.items():
                     if name in new_db and vercmp(new_db[name], was) < 0:
                         raise Refused(f"release {version}: grassfield.db has {name} {new_db[name]}, older than the "
-                                      f"published {was} (a rollback is a new release with a higher pkgrel)")
+                                      f"published {was} (a rollback is a new release with a higher pkgrel, or "
+                                      "ADR-0033 h.2's deliberate --rollback-to)")
             for name in SNAPSHOT_FILES:
                 files[name], files[name + ".sig"] = os.path.join(folder, name), os.path.join(folder, name + ".sig")
             packages = [(f, os.path.join(folder, f)) for f in packages]
@@ -258,19 +263,72 @@ def publish(store, releases, catalog, now=None, keyring_dir=None):
                 store.put_immutable(name, path)
             for name, path in icons:
                 store.put_immutable(os.path.join("catalog", name), path)
-            manifest["created"] = int(now if now is not None else time.time())
-            body = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-            snapshot = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(manifest["created"])) + "-" + \
-                hashlib.sha256(body).hexdigest()[:12]
-            with tempfile.TemporaryDirectory() as tmp:
-                with open(os.path.join(tmp, "manifest.json"), "wb") as f:
-                    f.write(body + b"\n")
-                store.put_snapshot(snapshot, dict(files, **{"manifest.json": os.path.join(tmp, "manifest.json")}))
-            if store.write_pointer_if(tag, snapshot):
+            snapshot = commit(store, tag, files, manifest, now)
+            if snapshot:
                 print(f"publish: snapshot {snapshot} ({', '.join(changed)}), was {current}")
                 return snapshot
-            store.drop_snapshot(snapshot)
-            print("publish: the pointer moved while this run built its snapshot: starting again from it")
+        raise RuntimeError(f"the pointer moved {ATTEMPTS} times in a row")
+
+
+def commit(store, tag, files, manifest, now=None):
+    """Uploads the complete snapshot, then writes the pointer only if its tag is still `tag`. The new id, or None when
+    the pointer moved (the snapshot is dropped and the caller starts again from the current one)."""
+    manifest["created"] = int(now if now is not None else time.time())
+    body = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    snapshot = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(manifest["created"])) + "-" + \
+        hashlib.sha256(body).hexdigest()[:12]
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "manifest.json"), "wb") as f:
+            f.write(body + b"\n")
+        store.put_snapshot(snapshot, dict(files, **{"manifest.json": os.path.join(tmp, "manifest.json")}))
+    if store.write_pointer_if(tag, snapshot):
+        return snapshot
+    store.drop_snapshot(snapshot)
+    print("publish: the pointer moved while this run built its snapshot: starting again from it")
+    return None
+
+
+def rollback(store, target, now=None, keyring_dir=None):
+    """ADR-0033 h.2's deliberate rollback, the one exception to "never backwards": a NEW snapshot with the databases and
+    notes of an older snapshot of the channel (target) and every other file of the current one (the catalog); never the
+    pointer moved back (R4: a client already on the newer snapshot would then fail every update). The files keep their
+    signatures, so no key is needed. Clients that installed the newer release keep it (pacman does not downgrade).
+    The caller withdraws the newer release builds first, so that a later run does not publish them again
+    (scripts/rollback.sh). As a publication does, it checks the signatures of the databases and notes it reads or
+    publishes against keyring_dir before bsdtar reads a database (a snapshot signed by a key revoked since is refused).
+    Returns the new snapshot id."""
+    if not isinstance(target, str) or not SNAPSHOT_ID.match(target):
+        raise Refused(f"{target!r} is not a snapshot id")
+    with store.run_lock():
+        for _ in range(ATTEMPTS):
+            current, tag = store.read_pointer()
+            if current is None or target == current:
+                raise Refused(f"{target} is not an older snapshot than the current one ({current})")
+            try:
+                old = store.manifest(target)
+            except FileNotFoundError:
+                raise Refused(f"no snapshot {target} in {store.channel}")
+            cur = store.manifest(current)
+            for snap in (target, current):
+                for name in SNAPSHOT_FILES:
+                    problem = catalogtool.signature_problem(store.snapshot_path(snap, name), keyring_dir)
+                    if problem:
+                        raise Refused(f"snapshot {snap}: {name}: {problem}")
+            was = db_versions(store.snapshot_path(current, "grassfield.db")).get("grassfield-desktop")
+            back = db_versions(store.snapshot_path(target, "grassfield.db")).get("grassfield-desktop")
+            if not was or not back or vercmp(back, was) >= 0:
+                raise Refused(f"{target} holds grassfield-desktop {back}, not older than the current {was}")
+            files = {name: store.snapshot_path(current, name) for name in cur["files"]}
+            for name in SNAPSHOT_FILES:
+                files[name], files[name + ".sig"] = (store.snapshot_path(target, name),
+                                                      store.snapshot_path(target, name + ".sig"))
+            manifest = dict(cur, release=old["release"], previous=current, rollbackOf=target,
+                            files={name: sha256_file(path) for name, path in sorted(files.items())})
+            snapshot = commit(store, tag, files, manifest, now)
+            if snapshot:
+                print(f"publish: snapshot {snapshot} (rollback to {target}: grassfield-desktop {back}, was {was}), "
+                      f"was {current}")
+                return snapshot
         raise RuntimeError(f"the pointer moved {ATTEMPTS} times in a row")
 
 
@@ -292,16 +350,26 @@ def main(argv):
     ap.add_argument("--catalog", help="the catalog built from main's head and signed for this channel")
     ap.add_argument("--keyring-dir", required=True,
                     help="the keyring folder the Store and pacman trust (grassfield.gpg, grassfield-trusted, "
-                         "grassfield-revoked): every release file and the catalog are checked against it")
+                         "grassfield-revoked): every release file, the catalog and a rollback's files are checked "
+                         "against it")
+    ap.add_argument("--rollback-to", metavar="SNAPSHOT",
+                    help="ADR-0033 h.2's deliberate rollback to an older snapshot (scripts/rollback.sh withdraws the newer "
+                         "release builds first); not with --releases or --catalog")
     ap.add_argument("--keep-days", type=int, default=7)
     args = ap.parse_args(argv)
     for tool in ("vercmp", "bsdtar"):
         if shutil.which(tool) is None:
             print(f"publish: {tool} is missing (pacman, libarchive)", file=sys.stderr)
             return 2
+    if args.rollback_to and (args.releases or args.catalog):
+        print("publish: --rollback-to publishes an older snapshot again, nothing else", file=sys.stderr)
+        return 2
     store = LocalStore(args.store, args.channel, args.arch)
     try:
-        publish(store, args.releases, args.catalog, keyring_dir=args.keyring_dir)
+        if args.rollback_to:
+            rollback(store, args.rollback_to, keyring_dir=args.keyring_dir)
+        else:
+            publish(store, args.releases, args.catalog, keyring_dir=args.keyring_dir)
     except Refused as e:
         print(f"publish: refused: {e}", file=sys.stderr)
         return 1

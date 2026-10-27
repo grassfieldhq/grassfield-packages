@@ -1,0 +1,24 @@
+# Install script of grassfield-keyring (runs as root inside pacman's transaction; grassfield ADR-0033 b.2, b.8).
+
+post_install() {
+	post_upgrade
+}
+
+post_upgrade() {
+	# Only a keyring that holds keys, and only while this machine uses [grassfield] (/etc/pacman.d/grassfield.conf exists).
+	# Otherwise nothing is trusted here: grassfield-channel-set's helper populates the same folder when updates are set up.
+	if [ -s usr/share/grassfield/pacman-keyring/grassfield.gpg ] && [ -e etc/pacman.d/grassfield.conf ]; then
+		usr/bin/pacman-key --populate-from /usr/share/grassfield/pacman-keyring --populate grassfield
+	fi
+}
+
+pre_remove() {
+	# The trust this package gave leaves with it: a locally signed key is trusted for every repository, so each key of its
+	# trusted list is deleted from pacman's keyring. An empty list (no key yet) deletes nothing.
+	while IFS=: read -r fpr _; do
+		case $fpr in '' | *[!0-9A-Fa-f]*) continue ;; esac
+		usr/bin/pacman-key --list-keys "$fpr" >/dev/null 2>&1 || continue
+		usr/bin/pacman-key --delete "$fpr" >/dev/null || echo "grassfield-keyring: the key $fpr could not be deleted from pacman's keyring"
+	done <usr/share/grassfield/pacman-keyring/grassfield-trusted
+	return 0
+}

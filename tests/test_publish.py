@@ -290,6 +290,54 @@ class Publisher(unittest.TestCase):
             self.run_once(now=1793099999)
         self.assertIn("already published with other content", str(e.exception))
 
+    def test_deliberate_rollback(self):
+        # ADR-0033 h.2: a new snapshot with the older databases and notes, the catalog kept; never the pointer moved back.
+        self.release("1.0.0-1")
+        first, _ = self.run_once()
+        self.release("1.0.1-1")
+        second, _ = self.run_once(self.catalog(100), now=1793095300)
+        with redirect_stdout(io.StringIO()) as out:
+            back = publish.rollback(self.store, first, now=1793095400, keyring_dir=self.keyring)
+        self.assertNotIn(back, (first, second))
+        self.assertIn("rollback to " + first, out.getvalue())
+        m = self.current()
+        self.assertEqual((m["release"], m["previous"], m["rollbackOf"], m["catalogSerial"]), ("1.0.0-1", second, first, 100))
+        self.assertIn(publish.CATALOG_FILE, m["files"])
+        for name in publish.SNAPSHOT_FILES + tuple(n + ".sig" for n in publish.SNAPSHOT_FILES):
+            with open(self.store.snapshot_path(first, name), "rb") as a, open(self.store.snapshot_path(back, name), "rb") as b:
+                self.assertEqual(a.read(), b.read(), name)
+        # The newer release build withdrawn (scripts/rollback.sh), the next run leaves the rollback in place.
+        shutil.rmtree(os.path.join(self.releases, "1.0.1-1"))
+        again, out = self.run_once(self.catalog(100), now=1793095500)
+        self.assertIsNone(again)
+        self.assertIn("nothing new", out)
+        # A newer tag publishes as usual.
+        self.release("1.0.2-1")
+        self.assertIsNotNone(self.run_once(self.catalog(100), now=1793095600)[0])
+        self.assertEqual(self.current()["release"], "1.0.2-1")
+
+    def test_rollback_refusals(self):
+        self.release("1.0.0-1")
+        first, _ = self.run_once()
+        self.release("1.0.1-1")
+        second, _ = self.run_once(now=1793095300)
+        for target, why in ((second, "not an older snapshot"), ("20991231T000000Z-000000000000", "no snapshot"),
+                            ("../../../etc", "not a snapshot id"), (first + "/..", "not a snapshot id")):
+            with self.subTest(why), self.assertRaises(publish.Refused) as e:
+                publish.rollback(self.store, target, now=1793095400, keyring_dir=self.keyring)
+            self.assertIn(why, str(e.exception))
+        with redirect_stdout(io.StringIO()):
+            back = publish.rollback(self.store, first, now=1793095400, keyring_dir=self.keyring)
+        with self.assertRaises(publish.Refused) as e:  # the newer snapshot is not older than the rollback
+            publish.rollback(self.store, second, now=1793095500, keyring_dir=self.keyring)
+        self.assertIn("not older than the current", str(e.exception))
+        self.assertEqual(self.store.read_pointer()[0], back)
+        with redirect_stdout(io.StringIO()), unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            code = publish.main(["--store", self.tmp, "--channel", "stable", "--keyring-dir", self.keyring,
+                                 "--rollback-to", first, "--releases", self.releases])
+        self.assertEqual(code, 2)
+        self.assertIn("--rollback-to publishes an older snapshot again, nothing else", err.getvalue())
+
     def test_prune_keeps_the_current_snapshot(self):
         self.release("1.0.0-1")
         old, _ = self.run_once()
