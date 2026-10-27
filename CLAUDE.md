@@ -27,10 +27,12 @@ docs/STATE.md (every session).
 - Catalog: our own words, plain text; never Apple's names ("App Store", "Arcade"), editorial texts or assets; a publisher's
   icon only for an app without metadata, with its licence and origin recorded, and marked "needs legal review" (owner
   decision ST10); every source and recipe it names is checked by CI against the pinned Omarchy release, and a recipe that
-  syncs (`pacman -Sy`, `-Syu`, `yay -Sy`) is refused (ADR-0037 g).
+  syncs (`pacman -Sy`, `-Syu`, `yay -Sy`) is refused, and so is a `repo` app whose package owns no application entry
+  (ADR-0037 g, SD1).
 - Publication (written, disabled): one serialized publisher per channel for releases and catalog updates alike; it builds
   from the current snapshot, never puts an older package database back, and writes the pointer only if it has not moved
-  (ADR-0037 g, ADR-0033 h.2).
+  (ADR-0037 g, ADR-0033 h.2). Each run publishes the latest state (the newest release built for the channel, the catalog of
+  `main`'s head), never what its trigger carried: GitHub cancels a waiting run when a newer one queues.
 - Commits: author `Chapdel KAMGA <developer@notchpay.co>` in cloud sessions; never a trailer of any kind
   (no Co-Authored-By, no Claude-Session, no Signed-off-by, no signature).
 - No new service, dependency or language without need. A change to a contract goes through its ADR in grassfield

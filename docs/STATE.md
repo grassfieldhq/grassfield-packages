@@ -12,6 +12,13 @@ Last updated: 2026-10-27
   is one serialized publisher per channel, building from the current snapshot, never backwards, with a conditional pointer
   write (MAJOR 3; ADR-0033 h.2 amended in grassfield PR #15); publishers' icons for apps without metadata (owner, ST10) with
   their licence and origin, needs legal review; CI refuses recipes that sync. README and CLAUDE.md updated.
+- 2026-10-27, after the opus counter-review (FAIL, 1 MAJOR on grassfield's side, in grassfield PR #15): each publishing run
+  publishes the latest state (the newest release built for the channel, the catalog of `main`'s head), since GitHub cancels
+  a waiting run in a concurrency group when a newer one queues and each tag is built once; CI also refuses a `repo` app whose
+  package owns no application entry (ADR-0037 SD1). README and CLAUDE.md updated. The owner's working rule of 2026-10-27
+  (decisions taken in the session under "macOS first, no technical step for the user", recorded in ADR-0037 as SD rows;
+  legal, publication, keys, secrets, root rights, security rules, money and irreversible actions still asked) applies here
+  too; CLAUDE.md's "Decisions" line is unchanged until the owner amends it.
 
 ## Tests run
 - None (docs only).

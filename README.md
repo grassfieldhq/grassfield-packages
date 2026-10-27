@@ -21,6 +21,10 @@ catalog of Grassfield Store.
   through one serialized publishing job per channel: it builds the new snapshot from the current one, never puts an older
   package database back, and writes the pointer only if it has not moved since it read it (ADR-0037 g, ADR-0033 h.2 as
   amended). A catalog update can never move the package database back.
+- **Each publishing run publishes the latest state.** GitHub cancels a run still waiting in a concurrency group when a newer
+  one queues, and each tag is built once, so a run takes nothing from the event that started it: it publishes the newest
+  release built and signed for the channel and the catalog of `main`'s head. A cancelled waiting run loses nothing; a run
+  with nothing new writes nothing.
 
 ## Status
 Nothing is published. The repository stays private until the owner decides, after the legal review of milestone M5.
