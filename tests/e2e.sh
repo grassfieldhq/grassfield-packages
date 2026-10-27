@@ -38,7 +38,11 @@ if [[ ${1:-} != --inside ]]; then
     shift
   done
   [[ -d $gf/.git ]] || { echo "usage: e2e.sh --grassfield DIR [--ref REF] (a checkout with its history)" >&2; exit 2; }
-  command -v docker >/dev/null && docker info >/dev/null 2>&1 || { echo "SKIP: no docker daemon (this test runs only in a throwaway container)"; exit 0; }
+  if ! { command -v docker >/dev/null && docker info >/dev/null 2>&1; }; then
+    # A skip must not look like a pass where tests are expected to run.
+    [[ -z ${CI:-} ]] || { echo "FAIL: no docker daemon in CI: the end-to-end did not run"; exit 1; }
+    echo "SKIP: no docker daemon (this test runs only in a throwaway container)"; exit 0
+  fi
   args=(--rm --network host -e "E2E_REF=$ref" -v "$here:/packages:ro" -v "$(realpath "$gf"):/grassfield:ro")
   [[ -n ${GRASSFIELD_TEST_CA:-} ]] && args+=(-v "$(realpath "$GRASSFIELD_TEST_CA"):/etc/ssl/certs/ca-certificates.crt:ro")
   for v in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy NO_PROXY no_proxy; do [[ -n ${!v:-} ]] && args+=(-e "$v"); done
@@ -117,16 +121,20 @@ released() { # channel version -> the releases its release build's notes list
     "$W/tree/releases/$1/$2/grassfield-notes.json" 2>/dev/null
 }
 keyring_sum() { sha256sum "$W"/tree/stable/x86_64/grassfield-keyring-*.pkg.tar.zst | awk '{print $1}'; }
-build() { # commit; this container is also the user's machine: its pacman.conf ([grassfield] included) is kept aside
+build() { # tag [--pkgrel N]; this container is also the user's machine: its pacman.conf ([grassfield] included) is kept aside
   local rc
   cp /etc/pacman.conf "$W/pacman.conf.client"
   "$P/scripts/build-channel.sh" --source "$W/gf" --ref "$1" --tree "$W/tree" --gnupghome /root/keys/k --key "$K" \
-    --keyring "$W/keyring" >"$W/build-$1.log" 2>&1
+    --keyring "$W/keyring" "${@:2}" >"$W/build-$1${3:+-pkgrel$3}.log" 2>&1
   rc=$?
   grep -q '^\[grassfield\]' "$W/pacman.conf.client" && cp "$W/pacman.conf.client" /etc/pacman.conf
   return $rc
 }
 publish_view() { "$P/scripts/view.sh" "$W/tree" /srv/view; }
+# As a client checks it: each signature by a key the tree's own grassfield-keyring trusts (K here).
+check_tree() { "$P/scripts/check-tree.sh" --tree "$W/tree" --trusted; }
+pointer() { python3 -I "$P/scripts/snapshot.py" current "$W/tree/$1/x86_64"; }
+desktop_in() { bsdtar -xOf "$1" | awk '/^%NAME%$/ { getline n } /^%VERSION%$/ { getline v; if (n == "grassfield-desktop") { print v; exit } }'; }
 
 say "build 1.0.0 (the real PKGBUILD, Omarchy stable's package set)"
 start=$(date +%s)
@@ -137,7 +145,7 @@ grep -E '^(commit|channels|stable:|beta:|trust anchor|done)' "$W/build-$C1.log" 
 sed -n '/^ref/,/^package-set:/p' "$W"/tree/build-*.txt | sed 's/^/   /'
 expect "the release builds the publisher reads: releases/stable/1.0.0-$REL and releases/beta/1.0.0-$REL" \
   test "$(released stable "1.0.0-$REL"):$(released beta "1.0.0-$REL")" == "1.0.0-$REL:1.0.0-$REL"
-expect "the tree follows the contract (check-tree.sh)" "$P/scripts/check-tree.sh" --tree "$W/tree" --keyring "$W/k.gpg"
+expect "the tree follows the contract (check-tree.sh --trusted: K is in the keyring it ships)" check_tree
 publish_view
 K1=$(keyring_sum)
 
@@ -171,8 +179,7 @@ expect "1.0.1's stable notes list it and the earlier 1.0.0, from the tags (built
   test "$(released stable "1.0.1-$REL")" == "1.0.1-$REL 1.0.0-$REL"
 expect "grassfield-keyring built once: the same file in 1.0.1's release build ($(grep -c 'used again' "$W/build-$C2.log") reuse)" \
   test "$(keyring_sum):$(sha256sum "$W"/tree/releases/stable/1.0.1-"$REL"/grassfield-keyring-*.pkg.tar.zst | awk '{print $1}')" == "$K1:$K1"
-expect "the tree follows the contract (check-tree.sh: every package with the SHA-256 its database records)" \
-  "$P/scripts/check-tree.sh" --tree "$W/tree" --keyring "$W/k.gpg"
+expect "the tree follows the contract (check-tree.sh: every package with the SHA-256 its database records)" check_tree
 publish_view
 cp -a /srv/view "$W/view.good"
 v=/srv/view/stable/x86_64
@@ -205,6 +212,23 @@ expect "pacman -Syu installs 1.0.1 (grassfield-desktop, -compositor and -icons t
   test "$(pacman -Q grassfield-desktop grassfield-compositor grassfield-icons | awk '{print $2}' | sort -u)" == 1.0.1-$REL
 expect "the checker: up-to-date" test "$(check state)" == up-to-date
 
+R2=$((REL + 1))
+say "ADR-0033 f, O7: 1.0.1 rebuilt for its Hyprland with pkgrel $R2 (build-channel.sh --pkgrel, no new tag)"
+build "$C2" --pkgrel "$R2"; rc=$?
+expect "build-channel.sh $C2 --pkgrel $R2 -> exit 0 ($(grep -E '^stable: snapshot' "$W/build-$C2-pkgrel$R2.log"))" test "$rc" == 0 ||
+  tail -n 40 "$W/build-$C2-pkgrel$R2.log"
+hypr=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}')
+expect "its notes: 'Rebuilt for Hyprland ${hypr%-*}' first, then 1.0.1-$REL and 1.0.0-$REL from the tags" \
+  test "$(released stable "1.0.1-$R2"):$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["releases"][0]["notes"]["en"])' \
+    "$W/tree/releases/stable/1.0.1-$R2/grassfield-notes.json")" == "1.0.1-$R2 1.0.1-$REL 1.0.0-$REL:Rebuilt for Hyprland ${hypr%-*}."
+expect "the tree follows the contract" check_tree
+publish_view
+expect "the checker: 1.0.1-$REL -> 1.0.1-$R2 with its verified note" \
+  test "$(check state grassfield.installed grassfield.available grassfield.notesError):$(python3 -I -c 'import json; print(json.load(open("/work/check.json"))["grassfield"]["notes"][0]["notes"]["en"])')" == \
+    "available 1.0.1-$REL 1.0.1-$R2 None:Rebuilt for Hyprland ${hypr%-*}."
+pacman -Syu --noconfirm >>"$W/client.log" 2>&1; rc=$?
+expect "pacman -Syu -> exit 0, installs 1.0.1-$R2" test "$rc:$(installed)" == "0:1.0.1-$R2"
+
 say "A10 beta, then back to stable without a downgrade"
 build "$C3"; rc=$?
 expect "build-channel.sh 1.1.0-beta1 -> exit 0, beta only" test "$rc:$(grep -c '^stable:' "$W/build-$C3.log")" == "0:0" || tail -n 40 "$W/build-$C3.log"
@@ -230,19 +254,31 @@ printf 'SigLevel = Required\nServer = http://127.0.0.1:8788/stable/$arch\n' >/et
 rm -f /var/lib/pacman/sync/grassfield.*
 expect "pacman -Sy over the redirects of the current snapshot (1.0.1)" pacman -Sy
 mapfile -t snaps < <(ls "$W/tree/stable/x86_64/snap")
-older=${snaps[0]} newer=$(cat "$W/tree/stable/x86_64/pointer")
-echo "$older" >"$W/tree/stable/x86_64/pointer"
+older=${snaps[0]} newer=$(pointer stable)
+cp "$W/tree/stable/x86_64/pointer" "$W/pointer.newer"
+printf '{"snapshot": "%s"}\n' "$older" >"$W/tree/stable/x86_64/pointer"
 pacman -Sy >"$W/back.log" 2>&1; rc=$?
 expect "the pointer moved back to the older snapshot: pacman -Sy fails for this client ($(grep -m1 '^error:' "$W/back.log"))" test "$rc" == 1
-echo "$newer" >"$W/tree/stable/x86_64/pointer"
-"$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --to "$older" --gnupghome /root/keys/k --key "$K" >"$W/rollback.log" 2>&1
-expect "rollback.sh: a new snapshot with the older packages ($(tail -n 1 "$W/rollback.log"))" test "$(cat "$W/tree/stable/x86_64/pointer")" != "$newer"
+cp "$W/pointer.newer" "$W/tree/stable/x86_64/pointer"
+rb() { "$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --gnupghome /root/keys/k --key "$K" --to "$@"; }
+out=$(rb "$newer" 2>&1); rc=$?
+expect "rollback.sh --to the current snapshot -> refused, exit 1 ($out)" test "$rc" == 1
+out=$(rb 20991231T000000Z-000000000000 2>&1); rc=$?
+expect "rollback.sh --to a snapshot that does not exist -> refused, exit 1 ($out)" test "$rc" == 1
+rb "$older" >"$W/rollback.log" 2>&1; rc=$?
+now=$(pointer stable)
+expect "rollback.sh --to $older -> exit 0: a new snapshot ($now), grassfield-desktop $(desktop_in "$W/tree/stable/x86_64/snap/$now/grassfield.db"), after $newer" \
+  test "$rc:$([[ $now != "$newer" && $now != "$older" ]] && echo new):$(desktop_in "$W/tree/stable/x86_64/snap/$now/grassfield.db"):$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["previous"])' "$W/tree/stable/x86_64/snap/$now/manifest.json")" == \
+    "0:new:1.0.0-$REL:$newer"
+expect "... the newer release builds withdrawn, so the publisher's next run cannot put them back (review M3): releases/stable $(ls "$W/tree/releases/stable" | tr '\n' ' ')" \
+  test "$(ls "$W/tree/releases/stable" | tr '\n' ' '):$(ls "$W/tree/withdrawn/stable" 2>/dev/null | tr '\n' ' ')" == "1.0.0-$REL :1.0.1-$REL 1.0.1-$R2 "
 expect "... pacman -Sy works" pacman -Sy
-pacman -Syu --noconfirm >"$W/syu.log" 2>&1
-expect "... and pacman -Syu downgrades nothing" test "$(installed)" == "1.1.0beta1-$REL"
+pacman -Syu --noconfirm >"$W/syu.log" 2>&1; rc=$?
+expect "... and pacman -Syu -> exit 0, downgrades nothing (1.1.0beta1-$REL 'is newer than grassfield' 1.0.0-$REL)" \
+  test "$rc:$(installed):$(grep -c "grassfield-desktop: local (1.1.0beta1-$REL) is newer than grassfield (1.0.0-$REL)" "$W/syu.log")" == "0:1.1.0beta1-$REL:1"
 grep -E '" 30[24] ' "$W/serve.log" | head -n 4 | sed 's/^/   /'
 kill "$server" 2>/dev/null
-expect "the tree after the rollback still follows the contract" "$P/scripts/check-tree.sh" --tree "$W/tree" --keyring "$W/k.gpg"
+expect "the tree after the rollback still follows the contract" check_tree
 
 say "removal, and the real keyless keyring"
 pacman -Rn --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >"$W/rn.log" 2>&1; rc=$?
@@ -259,9 +295,11 @@ expect "pacman -Rn: exit 0, no [grassfield] line, no file, K no longer in pacman
 before=$(gpg --homedir /etc/pacman.d/gnupg --batch --with-colons --list-keys 2>/dev/null | grep -c '^pub:')
 cp -a "$P/keyring" "$W/real-keyring" && chown -R builder: "$W/real-keyring"
 (cd "$W/real-keyring" && runuser -u builder -- makepkg -f --noconfirm >>"$W/client.log" 2>&1)
-pacman -U --noconfirm "$W"/real-keyring/grassfield-keyring-*.pkg.tar.zst >>"$W/client.log" 2>&1
+pacman -U --noconfirm "$W"/real-keyring/grassfield-keyring-*.pkg.tar.zst >>"$W/client.log" 2>&1; rc=$?
 after=$(gpg --homedir /etc/pacman.d/gnupg --batch --with-colons --list-keys 2>/dev/null | grep -c '^pub:')
-expect "this repository's keyring (no key until O11) installs and trusts nothing ($before keys before and after)" test "$before" == "$after"
+ours=$(gpg --homedir /etc/pacman.d/gnupg --batch --with-colons --list-keys 2>/dev/null | grep -ci '^uid:.*grassfield')
+expect "this repository's keyring (no key until O11): pacman -U exit 0, installed, empty, trusts nothing ($before keys before, $after after, $ours Grassfield uid)" \
+  test "$rc:$(pacman -Qq grassfield-keyring 2>/dev/null):$(cat /usr/share/grassfield/pacman-keyring/* | wc -c):$before:$ours" == "0:grassfield-keyring:0:$after:0"
 expect "... and removes cleanly" pacman -Rn --noconfirm grassfield-keyring
 
 say "done: $fails failure(s)"

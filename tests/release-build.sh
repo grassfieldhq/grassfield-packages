@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # The release build's pieces with small fake packages (grassfield ADR-0033 b.7, g; ADR-0037 g): notes.py's earlier
-# releases from the tags, sign-release.sh, and check-tree.sh on a release build. The real packages are build-channel.sh's,
-# tested by e2e.sh. Runs itself in a throwaway archlinux:base container (git, vercmp, repo-add, throwaway keys made there
-# and gone with it). Exit 0 all PASS (or SKIP without docker), 1 a FAIL.
+# releases from the tags, sign-release.sh, snapshot.py (the publisher's format: the manifest, the catalog kept, the pointer
+# written only if it has not moved) and check-tree.sh (--keyring, and --trusted as a client checks it). The real packages
+# are build-channel.sh's, tested by e2e.sh. Runs itself in a throwaway archlinux:base container (git, vercmp, repo-add,
+# throwaway keys made there and gone with it). Exit 0 all PASS (or SKIP without docker, outside CI), 1 a FAIL.
 set -u
 IMAGE=archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
 if [[ ${1:-} != --inside ]]; then
   here=$(cd "$(dirname "$0")/.." && pwd)
-  command -v docker >/dev/null && docker info >/dev/null 2>&1 || { echo "SKIP: no docker daemon"; exit 0; }
+  if ! { command -v docker >/dev/null && docker info >/dev/null 2>&1; }; then
+    [[ -z ${CI:-} ]] || { echo "FAIL: no docker daemon in CI: the test did not run"; exit 1; }
+    echo "SKIP: no docker daemon"; exit 0
+  fi
   args=(--rm --network host -v "$here:/p:ro")
   [[ -n ${GRASSFIELD_TEST_CA:-} ]] && args+=(-v "$(realpath "$GRASSFIELD_TEST_CA"):/etc/ssl/certs/ca-certificates.crt:ro")
   for v in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy NO_PROXY no_proxy; do [[ -n ${!v:-} ]] && args+=(-e "$v"); done
@@ -60,16 +64,18 @@ mkkey() {
 K1=$(mkkey k1) K2=$(mkkey k2)
 gpg --homedir /root/keys/k2 --export "$K2" >/w/k2.gpg
 sig() { gpg --homedir "/root/keys/$1" --batch --detach-sign --no-armor --yes -o "$2.sig" "$2" 2>/dev/null; }
-mkpkg() { # dir name version
+mkpkg() { # dir name version [keyring folder: a grassfield-keyring with those files]
   local d; d=$(mktemp -d)
   mkdir -p "$d/usr/share/$2" && echo "$2 $3" >"$d/usr/share/$2/v"
+  [[ -z ${4:-} ]] || { mkdir -p "$d/usr/share/grassfield" && cp -r "$4" "$d/usr/share/grassfield/pacman-keyring"; }
   printf 'pkgname = %s\npkgbase = %s\npkgver = %s\npkgdesc = test\nbuilddate = %s\npackager = test\nsize = 4\narch = any\nlicense = MIT\n' \
     "$2" "$2" "$3" "$RANDOM" >"$d/.PKGINFO"
   (cd "$d" && bsdtar --zstd -cf "$1/$2-$3-any.pkg.tar.zst" .PKGINFO usr)
 }
 r=/w/tree/releases/stable/1.0.1-3 pub=/w/published
 mkdir -p "$r" "$pub"
-mkpkg "$r" grassfield-desktop 1.0.1-3 && mkpkg "$r" grassfield-keyring 20261027-1 && mkpkg "$pub" grassfield-keyring 20261027-1
+mkdir -p /w/kr-k2 && gpg --homedir /root/keys/k2 --export "$K2" >/w/kr-k2/grassfield.gpg && echo "$K2:4:" >/w/kr-k2/grassfield-trusted && : >/w/kr-k2/grassfield-revoked
+mkpkg "$r" grassfield-desktop 1.0.1-3 && mkpkg "$r" grassfield-keyring 20261027-1 /w/kr-k2 && mkpkg "$pub" grassfield-keyring 20261027-1 /w/kr-k2
 for f in "$r"/*.pkg.tar.zst; do sig k1 "$f"; done
 sig k2 "$pub/grassfield-keyring-20261027-1-any.pkg.tar.zst"
 mkdir -p /tmp/db && (cd "$r" && repo-add -q /tmp/db/grassfield.db.tar.gz ./*.pkg.tar.zst >/dev/null)
@@ -83,6 +89,58 @@ expect "... grassfield-keyring is the published file, with its signature" \
   cmp -s "$r/grassfield-keyring-20261027-1-any.pkg.tar.zst" "$pub/grassfield-keyring-20261027-1-any.pkg.tar.zst"
 expect "... the release build passes check-tree.sh with K2 alone (every signature, the database's SHA-256)" \
   /p/scripts/check-tree.sh --tree /w/tree --keyring /w/k2.gpg
+expect "... and check-tree.sh --trusted: K2 is in the trusted list of the grassfield-keyring the release ships" \
+  /p/scripts/check-tree.sh --tree /w/tree --trusted
+
+echo "== snapshot.py: the publisher's format"
+d=/w/tree/stable/x86_64 && mkdir -p "$d"
+cp "$r"/*.pkg.tar.zst "$r"/*.pkg.tar.zst.sig "$d/"
+id1=$(python3 -I /p/scripts/snapshot.py write "$d" --release 1.0.1-3 --source "$r" --expect "")
+expect "the first snapshot: pointer {\"snapshot\": \"$id1\"}, manifest.json" \
+  test "$(cat "$d/pointer"):$(python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); print(m["release"], m["previous"], len(m["files"]))' "$d/snap/$id1/manifest.json")" == \
+    "{\"snapshot\": \"$id1\"}:1.0.1-3 None 6"
+# The Store's publisher adds a catalog to the current snapshot (simulated: its files and its manifest entry).
+printf '{"version":1}\n' >"$d/snap/$id1/grassfield-catalog.v1.json" && sig k2 "$d/snap/$id1/grassfield-catalog.v1.json"
+python3 -I - "$d/snap/$id1" <<'PY'
+import hashlib, json, os, sys
+m = json.load(open(os.path.join(sys.argv[1], "manifest.json")))
+for n in ("grassfield-catalog.v1.json", "grassfield-catalog.v1.json.sig"):
+    m["files"][n] = hashlib.sha256(open(os.path.join(sys.argv[1], n), "rb").read()).hexdigest()
+open(os.path.join(sys.argv[1], "manifest.json"), "w").write(json.dumps(m, sort_keys=True, separators=(",", ":")) + "\n")
+PY
+python3 -I /p/scripts/snapshot.py write "$d" --release 1.0.1-3 --source "$r" --expect 20991231T000000Z-000000000000 >/dev/null 2>/tmp/err; rc=$?
+expect "a pointer that moved since it was read -> nothing written, exit 1 ($(cat /tmp/err))" test "$rc:$(python3 -I /p/scripts/snapshot.py current "$d")" == "1:$id1"
+sleep 1
+id2=$(python3 -I /p/scripts/snapshot.py write "$d" --release 1.0.1-3 --source "$r" --expect "$id1")
+expect "the next snapshot keeps the current one's catalog and names its predecessor" \
+  test "$(ls "$d/snap/$id2" | grep -c catalog):$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["previous"])' "$d/snap/$id2/manifest.json")" == "2:$id1"
+expect "check-tree.sh --trusted on the channel and the release build (manifest, signatures, SHA-256)" \
+  /p/scripts/check-tree.sh --tree /w/tree --trusted
+echo tampered >>"$d/snap/$id2/grassfield-catalog.v1.json"
+/p/scripts/check-tree.sh --tree /w/tree --trusted >/tmp/check.log 2>&1; rc=$?
+expect "a snapshot file that is not the one its manifest records -> exit 1 ($(grep -m1 FAIL /tmp/check.log))" test "$rc" == 1
+rm -rf "$d"
+
+echo "== check-tree.sh --trusted refuses a key its grassfield-keyring does not trust"
+trusted_case() { # trusted-list revoked-list -> check-tree --trusted's exit code on a release build signed by K2
+  local t=/w/t-$RANDOM k=/w/kr-$RANDOM
+  mkdir -p "$t/releases/beta/1.0.1-3" "$k"
+  gpg --homedir /root/keys/k2 --export "$K2" >"$k/grassfield.gpg" && gpg --homedir /root/keys/k1 --export "$K1" >>"$k/grassfield.gpg"
+  printf '%s' "$1" >"$k/grassfield-trusted" && printf '%s' "$2" >"$k/grassfield-revoked"
+  mkpkg "$t/releases/beta/1.0.1-3" grassfield-desktop 1.0.1-3 && mkpkg "$t/releases/beta/1.0.1-3" grassfield-keyring 20261027-1 "$k"
+  (cd "$t/releases/beta/1.0.1-3" && for f in ./*.pkg.tar.zst; do sig k2 "$f"; done && rm -f /tmp/db/* &&
+    repo-add -q /tmp/db/grassfield.db.tar.gz ./*.pkg.tar.zst >/dev/null && cp -L /tmp/db/grassfield.db.tar.gz grassfield.db &&
+    cp -L /tmp/db/grassfield.files.tar.gz grassfield.files &&
+    python3 -I /p/scripts/notes.py --channel beta --version 1.0.1-3 --date 2026-10-27 --en "$g/packaging/release-notes/1.0.1.en.txt" >grassfield-notes.json &&
+    for f in grassfield.db grassfield.files grassfield-notes.json; do sig k2 "$f"; done)
+  /p/scripts/check-tree.sh --tree "$t" --trusted >/tmp/check.log 2>&1
+}
+trusted_case "$K1:4:"$'\n' ""; rc=$?
+expect "signed by K2, its keyring trusts K1 only -> exit 1 ($(grep -m1 FAIL /tmp/check.log))" test "$rc" == 1
+trusted_case "$K2:4:"$'\n' "$K2"$'\n'; rc=$?
+expect "signed by K2, trusted but also revoked -> exit 1" test "$rc" == 1
+trusted_case "$K2:4:"$'\n' ""; rc=$?
+expect "signed by K2, trusted -> exit 0" test "$rc" == 0
 mkdir -p /w/pub.k1 && cp "$r"/grassfield-keyring-*.pkg.tar.zst /w/pub.k1/ && sig k1 /w/pub.k1/grassfield-keyring-20261027-1-any.pkg.tar.zst
 /p/scripts/sign-release.sh --release /w/tree.k1/releases/stable/1.0.1-3 --gnupghome /root/keys/k2 --key "$K2" --published /w/pub.k1 >/tmp/sign.log 2>&1; rc=$?
 expect "a published package not signed by the key -> exit 1 ($(tail -n 1 /tmp/sign.log))" test "$rc" == 1
