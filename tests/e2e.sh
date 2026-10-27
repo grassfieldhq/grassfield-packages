@@ -268,6 +268,11 @@ out=$(rb "$newer" 2>&1); rc=$?
 expect "rollback.sh --to the current snapshot -> refused, exit 1 ($out)" test "$rc" == 1
 out=$(rb 20991231T000000Z-000000000000 2>&1); rc=$?
 expect "rollback.sh --to a snapshot that does not exist -> refused, exit 1 ($out)" test "$rc" == 1
+mkdir -p "$W/kr-none" && cp "$W/keyring/grassfield.gpg" "$W/kr-none/" && : >"$W/kr-none/grassfield-trusted" && : >"$W/kr-none/grassfield-revoked"
+before=$(ls "$W/tree/releases/stable" | tr '\n' ' ')
+out=$("$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --keyring-dir "$W/kr-none" --to "$older" 2>&1); rc=$?
+expect "a rollback the publisher refuses (a keyring that trusts no key) -> exit 1, nothing withdrawn, the pointer unmoved ($(tail -n 1 <<<"$out"))" \
+  test "$rc:$(ls "$W/tree/releases/stable" | tr '\n' ' '):$(ls "$W/tree/withdrawn/stable" 2>/dev/null | wc -l):$(pointer stable)" == "1:$before:0:$newer"
 rb "$older" >"$W/rollback.log" 2>&1; rc=$?
 now=$(pointer stable)
 expect "rollback.sh --to $older -> exit 0: a new snapshot ($now), grassfield-desktop $(desktop_in "$W/tree/stable/x86_64/snap/$now/grassfield.db"), after $newer" \

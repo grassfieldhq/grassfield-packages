@@ -64,17 +64,26 @@ mkkey() {
 K1=$(mkkey k1) K2=$(mkkey k2)
 gpg --homedir /root/keys/k2 --export "$K2" >/w/k2.gpg
 sig() { gpg --homedir "/root/keys/$1" --batch --detach-sign --no-armor --yes -o "$2.sig" "$2" 2>/dev/null; }
-mkpkg() { # dir name version [keyring folder: a grassfield-keyring with those files] [an extra .PKGINFO line]
-  local d; d=$(mktemp -d)
-  mkdir -p "$d/usr/share/$2" && echo "$2 $3" >"$d/usr/share/$2/v"
-  [[ -z ${4:-} ]] || { mkdir -p "$d/usr/share/grassfield" && cp -r "$4" "$d/usr/share/grassfield/pacman-keyring"; }
+mkpkg() { # dir name version [keyring folder: a grassfield-keyring of it, as makepkg builds one] [an extra .PKGINFO line]
+  local d meta=(.PKGINFO); d=$(mktemp -d)
+  if [[ -n ${4:-} ]]; then
+    mkdir -p "$d/usr/share/grassfield/pacman-keyring"
+    cp "$4"/grassfield.gpg "$4"/grassfield-trusted "$4"/grassfield-revoked "$d/usr/share/grassfield/pacman-keyring/"
+    cp "$4/grassfield-keyring.install" "$d/.INSTALL" && : >"$d/.BUILDINFO" && : >"$d/.MTREE"
+    meta+=(.INSTALL .BUILDINFO .MTREE)
+  else
+    mkdir -p "$d/usr/share/$2" && echo "$2 $3" >"$d/usr/share/$2/v"
+  fi
   printf 'pkgname = %s\npkgbase = %s\npkgver = %s\npkgdesc = test\nbuilddate = %s\npackager = test\nsize = 4\narch = any\nlicense = MIT\n%s' \
     "$2" "$2" "$3" "$RANDOM" "${5:+$5$'\n'}" >"$d/.PKGINFO"
-  (cd "$d" && bsdtar --zstd -cf "$1/$2-$3-any.pkg.tar.zst" .PKGINFO usr)
+  (cd "$d" && bsdtar --zstd -cf "$1/$2-$3-any.pkg.tar.zst" "${meta[@]}" usr)
+}
+mkkr() { # dir: a keyring/ folder (this repository's PKGBUILD and install script) for the files written in it
+  mkdir -p "$1" && cp /p/keyring/PKGBUILD /p/keyring/grassfield-keyring.install "$1/"
 }
 r=/w/tree/releases/stable/1.0.1-3 pub=/w/published
 mkdir -p "$r" "$pub"
-mkdir -p /w/kr-k2 && gpg --homedir /root/keys/k2 --export "$K2" >/w/kr-k2/grassfield.gpg && echo "$K2:4:" >/w/kr-k2/grassfield-trusted && : >/w/kr-k2/grassfield-revoked
+mkkr /w/kr-k2 && gpg --homedir /root/keys/k2 --export "$K2" >/w/kr-k2/grassfield.gpg && echo "$K2:4:" >/w/kr-k2/grassfield-trusted && : >/w/kr-k2/grassfield-revoked
 mkpkg "$r" grassfield-desktop 1.0.1-3 && mkpkg "$r" grassfield-keyring 20261027-1 /w/kr-k2 && mkpkg "$pub" grassfield-keyring 20261027-1 /w/kr-k2
 for f in "$r"/*.pkg.tar.zst; do sig k1 "$f"; done
 sig k2 "$pub/grassfield-keyring-20261027-1-any.pkg.tar.zst"
@@ -112,7 +121,7 @@ expect "a snapshot file that is not the one its manifest records -> exit 1 ($(gr
 echo "== check-tree.sh --trusted refuses a key its grassfield-keyring does not trust"
 trusted_case() { # trusted-list revoked-list -> check-tree --trusted's exit code on a release build signed by K2
   local t=/w/t-$RANDOM k=/w/kr-$RANDOM
-  mkdir -p "$t/releases/beta/1.0.1-3" "$k"
+  mkdir -p "$t/releases/beta/1.0.1-3" && mkkr "$k"
   gpg --homedir /root/keys/k2 --export "$K2" >"$k/grassfield.gpg" && gpg --homedir /root/keys/k1 --export "$K1" >>"$k/grassfield.gpg"
   printf '%s' "$1" >"$k/grassfield-trusted" && printf '%s' "$2" >"$k/grassfield-revoked"
   mkpkg "$t/releases/beta/1.0.1-3" grassfield-desktop 1.0.1-3 && mkpkg "$t/releases/beta/1.0.1-3" grassfield-keyring 20261027-1 "$k"
@@ -137,6 +146,24 @@ expect "prepare: a published package not signed by a key keyring/ trusts -> exit
 echo "== review minor 2: the keyring a release ships is keyring/'s, byte for byte"
 mkdir -p /w/kr-more && cp /w/kr-k2/* /w/kr-more/ && gpg --homedir /root/keys/k1 --export "$K1" >>/w/kr-more/grassfield.gpg &&
   echo "$K1:4:" >>/w/kr-more/grassfield-trusted
+kc() { /p/scripts/keyring-check.sh "$@" 2>&1; }
+kpkg=/w/tree/releases/stable/1.0.1-3/grassfield-keyring-20261027-1-any.pkg.tar.zst
+expect "keyring-check.sh: the release's keyring is keyring/'s, the whole package -> exit 0" kc "$kpkg" /w/kr-k2
+odd() { # what to change -> a keyring package of /w/kr-k2 changed that way, in /w/odd-$1
+  local o=/w/odd-$1 x=/w/kx-$1; mkdir -p "$o" && cp -r /w/kr-k2 "$x"
+  case $1 in
+    install) echo 'post_install() { pacman-key --lsign-key EVIL; }' >"$x/grassfield-keyring.install" ;;
+    field) mkpkg "$o" grassfield-keyring 20261027-1 /w/kr-k2 "provides = pacman-keyring"; return ;;
+    path) mkpkg "$o" grassfield-keyring 20261027-1 /w/kr-k2 && (cd /w && mkdir -p odd-x/etc/pacman.d && : >odd-x/etc/pacman.d/hook &&
+            bsdtar -xf "$o"/grassfield-keyring-*.pkg.tar.zst -C odd-x && cd odd-x && bsdtar --zstd -cf "$o"/grassfield-keyring-20261027-1-any.pkg.tar.zst .PKGINFO .INSTALL .BUILDINFO .MTREE usr etc); return ;;
+  esac
+  mkpkg "$o" grassfield-keyring 20261027-1 "$x"
+}
+for why in install field path; do
+  odd "$why"
+  out=$(kc /w/odd-$why/grassfield-keyring-20261027-1-any.pkg.tar.zst /w/kr-k2); rc=$?
+  expect "keyring-check.sh refuses a keyring package with another $why -> exit 1 ($out)" test "$rc" == 1
+done
 /p/scripts/sign-release.sh prepare --release /w/tree.k1b/releases/stable/1.0.1-3 --keyring /w/kr-more >/tmp/sign.log 2>&1; rc=$?
 expect "prepare: the release's grassfield-keyring is not keyring/'s -> exit 1 ($(tail -n 1 /tmp/sign.log))" test "$rc" == 1
 /p/scripts/check-tree.sh --tree /w/tree --trusted --keyring-src /w/kr-more >/tmp/check.log 2>&1; rc=$?
