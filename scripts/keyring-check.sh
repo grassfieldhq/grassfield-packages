@@ -6,7 +6,9 @@
 #
 # Same only if:
 #   - its paths are exactly .BUILDINFO, .INSTALL, .MTREE, .PKGINFO and usr/share/grassfield/pacman-keyring/ with
-#     grassfield.gpg, grassfield-trusted and grassfield-revoked (and the folders above them);
+#     grassfield.gpg, grassfield-trusted and grassfield-revoked (and the folders above them), each a regular file or a
+#     folder: no symbolic or hard link (bsdtar -xO reads a link as an empty file, and an empty grassfield-revoked pointed
+#     elsewhere would let a local user change what pacman-key --populate revokes);
 #   - those three files are KEYRING_DIR's byte for byte, and .INSTALL is KEYRING_DIR/grassfield-keyring.install;
 #   - .PKGINFO names grassfield-keyring at KEYRING_DIR/PKGBUILD's pkgver-pkgrel and holds nothing but makepkg's
 #     descriptive fields (no depends, provides, conflicts, replaces, backup, groups or anything else).
@@ -23,6 +25,12 @@ expected=$(printf '%s\n' .BUILDINFO .INSTALL .MTREE .PKGINFO usr/ usr/share/ usr
 list=$(bsdtar -tf "$pkg" 2>/dev/null | LC_ALL=C sort) || fail "unreadable"
 [[ $list == "$expected" ]] ||
   fail "not keyring/'s paths: $(LC_ALL=C comm -3 <(echo "$expected") <(echo "$list") | tr -s '\n\t' '  ')"
+# Each entry's type, from the first character of `bsdtar -tv`: "-" a regular file, "d" a folder; never a link.
+verbose=$(bsdtar -tvf "$pkg" 2>/dev/null) || fail "unreadable"
+! grep -qE ' -> | link to ' <<<"$verbose" || fail "a link among its entries: $(grep -m1 -E ' -> | link to ' <<<"$verbose")"
+typed=$(awk '{ print substr($1, 1, 1) " " $9 }' <<<"$verbose" | LC_ALL=C sort)
+[[ $typed == "$(sed 's|^\(.*/\)$|d \1|; t; s|^|- |' <<<"$expected" | LC_ALL=C sort)" ]] ||
+  fail "not regular files and folders only: $(grep -vE '^[-d]' <<<"$typed" | head -n 1)"
 same() { [[ $(bsdtar -xOf "$pkg" "$1" 2>/dev/null | sha256sum) == "$(sha256sum <"$2")" ]]; }
 for f in grassfield.gpg grassfield-trusted grassfield-revoked; do
   same "$k/$f" "$src/$f" || fail "$f is not keyring/$f"

@@ -154,12 +154,15 @@ odd() { # what to change -> a keyring package of /w/kr-k2 changed that way, in /
   case $1 in
     install) echo 'post_install() { pacman-key --lsign-key EVIL; }' >"$x/grassfield-keyring.install" ;;
     field) mkpkg "$o" grassfield-keyring 20261027-1 /w/kr-k2 "provides = pacman-keyring"; return ;;
+    link) mkpkg "$o" grassfield-keyring 20261027-1 /w/kr-k2 && (cd /w && mkdir -p odd-l && bsdtar -xf "$o"/grassfield-keyring-*.pkg.tar.zst -C odd-l &&
+            ln -sf /tmp/attacker-controlled odd-l/usr/share/grassfield/pacman-keyring/grassfield-revoked && cd odd-l &&
+            bsdtar --zstd -cf "$o"/grassfield-keyring-20261027-1-any.pkg.tar.zst .PKGINFO .INSTALL .BUILDINFO .MTREE usr); return ;;
     path) mkpkg "$o" grassfield-keyring 20261027-1 /w/kr-k2 && (cd /w && mkdir -p odd-x/etc/pacman.d && : >odd-x/etc/pacman.d/hook &&
             bsdtar -xf "$o"/grassfield-keyring-*.pkg.tar.zst -C odd-x && cd odd-x && bsdtar --zstd -cf "$o"/grassfield-keyring-20261027-1-any.pkg.tar.zst .PKGINFO .INSTALL .BUILDINFO .MTREE usr etc); return ;;
   esac
   mkpkg "$o" grassfield-keyring 20261027-1 "$x"
 }
-for why in install field path; do
+for why in install field path link; do
   odd "$why"
   out=$(kc /w/odd-$why/grassfield-keyring-20261027-1-any.pkg.tar.zst /w/kr-k2); rc=$?
   expect "keyring-check.sh refuses a keyring package with another $why -> exit 1 ($out)" test "$rc" == 1
