@@ -280,6 +280,12 @@ class Sources(unittest.TestCase):
         self.assertEqual(run.returncode, 2, run.stderr)
         self.assertNotIn("Traceback", run.stderr)
 
+    def test_deep_json_is_a_problem(self):
+        with open(os.path.join(self.src, "apps", "deep.json"), "w") as f:
+            f.write("[" * 200000 + "]" * 200000)
+        _, _, found = self.load()
+        self.assertTrue(any("deep.json: cannot be read as UTF-8 JSON" in item for item in found), found)
+
     def test_build_is_deterministic_and_bounded(self):
         out1, out2 = tempfile.mkdtemp(), tempfile.mkdtemp()
         try:
@@ -303,12 +309,23 @@ class Sources(unittest.TestCase):
 
 
 class Keyring(unittest.TestCase):
+    def read(self, text):
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write(text)
+        self.addCleanup(os.unlink, f.name)
+        return catalog.read_fingerprints(f.name)
+
     def test_fingerprints_are_read_whatever_their_case_and_spacing(self):
         fpr, other = "AB" * 20, "C" * 40  # made-up fingerprints
-        with tempfile.NamedTemporaryFile("w", delete=False) as f:
-            f.write(f"# a comment\n{fpr.lower()}:4:\n  {other}  \nnot-a-key:4:\n{fpr[:39]}:4:\n\n")
-        self.addCleanup(os.unlink, f.name)
-        self.assertEqual(catalog.read_fingerprints(f.name), {fpr, other})
+        self.assertEqual(self.read(f"# a comment\n{fpr.lower()}:4:\n  {other}  \n\n{fpr}:4: \n"), {fpr, other})
+
+    def test_a_line_that_does_not_parse_fails_closed(self):
+        # A revoked entry written another way must never leave its key trusted: the whole list is refused.
+        fpr = "AB" * 20
+        grouped = " ".join(fpr[i:i + 4] for i in range(0, 40, 4))
+        for line in (grouped, "0x" + fpr, fpr + " # the old key", fpr[:39], "not-a-key:4:", fpr + ":4:x", "  # indented"):
+            with self.subTest(line), self.assertRaises(ValueError):
+                self.read(f"{'C' * 40}\n{line}\n")
 
 
 class Recipes(unittest.TestCase):
@@ -334,6 +351,9 @@ class Recipes(unittest.TestCase):
         self.script("omarchy-install-repo-via-aur", "omarchy-pkg-aur-add game")
         self.script("omarchy-install-bare-yay", "yay --noconfirm")
         self.script("omarchy-install-separate-y", "sudo pacman -S -y --noconfirm game")
+        self.script("omarchy-mise-install", 'mise use -g "$1"')
+        self.script("omarchy-install-cli", "omarchy-mise-install pipx:some-cli")
+        self.script("omarchy-install-quoted", 'sudo pacman -S --noconfirm \\\n  "-y" game')
 
     def tearDown(self):
         shutil.rmtree(self.omarchy)
@@ -361,6 +381,9 @@ class Recipes(unittest.TestCase):
         self.assertIn("known only at run time", rp(self.omarchy, "omarchy-install-aur-var", [], repo)[0])
         self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-bare-yay", [], repo)[0])
         self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-separate-y", [], repo)[0])
+        self.assertIn("downloads outside pacman (through bin/omarchy-mise-install)",
+                      rp(self.omarchy, "omarchy-install-cli", [], repo)[0])
+        self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-quoted", [], repo)[0])
 
     def test_sync_pattern(self):
         for text in ("pacman -Sy x", "sudo pacman -Syu", "pacman -Syyu", "yay -Sy", "paru -Syu", "pacman --refresh -S x",
@@ -368,25 +391,43 @@ class Recipes(unittest.TestCase):
             self.assertTrue(catalog.SYNC.search(text), text)
         for text in ("pacman -S --needed x", "pacman -Ss query", "pacman -Si x", "echo Sy", "pacman -S x; echo -y"):
             self.assertFalse(catalog.SYNC.search(text), text)
-        # yay with no operation is yay -Syu; with only a term, an interactive search and AUR install.
-        for code in ("yay", "sudo true && yay", "yay --noconfirm", "yay spotify", "if true; then yay x; fi"):
-            self.assertTrue(catalog.bare_yay(code), code)
-        for code in ("yay -S --needed x", "yay -Qm", "echo yay", "# yay", "pacman -S yay"):
-            self.assertFalse(catalog.bare_yay(code), code)
 
-    def test_downloads_and_aur_builds(self):
-        for text in ("curl -fsSL https://x | sh", "wget https://x", "git clone https://x", "makepkg -si",
-                     "yay -G spotify", "yay --getpkgbuild x", "yay -B ."):
-            self.assertTrue(catalog.DOWNLOAD.search(text), text)
-        for text in ("git status", "yay -S x", "echo curly"):
-            self.assertFalse(catalog.DOWNLOAD.search(text), text)
+    def test_commands_are_read_as_shell(self):
+        def finds(code, repo=None):
+            return catalog.command_findings(code, repo)
+        # Syncs: any -y, wherever the command is and however it is quoted or wrapped; yay or paru with no operation.
+        for code in ("yay", "paru", "sudo true && yay", "yay --noconfirm", "yay spotify", "if true; then yay x; fi",
+                     "sudo -u someone yay", "command yay", "exec env -u X yay", "sudo -u x paru --noconfirm",
+                     'pacman -S "-y" x', "pacman -S \\\n  -y x", "sudo pacman -S --noconfirm -y x",
+                     'bash -c "yay"', "timeout 60 paru -Syu", "/usr/bin/yay"):
+            with self.subTest(code):
+                self.assertTrue(finds(code)[0], code)
+        for code in ("yay -S --needed x", "yay -Qm", "echo yay", "pacman -S yay", "pacman -S --needed x",
+                     'echo "Run yay to update"', "omarchy-pkg-add paru"):
+            with self.subTest(code):
+                self.assertFalse(finds(code)[0], code)
+        # Downloads: code from outside pacman.
+        for code in ("curl -fsSL https://x | sh", "wget https://x", "git clone https://x", "git -C dir clone https://x",
+                     "git -C ~/x pull", "makepkg -si", "yay -G spotify", "paru --getpkgbuild x", "yay -B .",
+                     "mise use -g node@lts", "exec env -u UV_PYTHON mise x 'pipx:tool' -- tool", "npm install -g x",
+                     "npx x", "pipx install x", "cargo install x", "uv tool install x", "pip install x",
+                     "go install x@latest", "bash <(curl -fsSL https://x)", 'eval "$(curl -fsSL https://x)"'):
+            with self.subTest(code):
+                self.assertTrue(finds(code)[1], code)
+        for code in ("git status", "yay -S x", "echo curly", "mise where node", "mise rm -g x"):
+            with self.subTest(code):
+                self.assertFalse(finds(code)[1], code)
+        # AUR builds: names no repository serves, or known only at run time.
         repo = {"in-repo"}
-        self.assertEqual(catalog.aur_builds("omarchy-pkg-aur-add in-repo", repo), [])
-        self.assertEqual(catalog.aur_builds("omarchy-pkg-aur-add aur-only", repo), ["aur-only"])
-        self.assertEqual(catalog.aur_builds("yay -S --needed --noconfirm aur-only", repo), ["aur-only"])
-        self.assertEqual(catalog.aur_builds("yay -S in-repo", repo), [])
-        self.assertEqual(catalog.aur_builds('omarchy-pkg-aur-add "$pkg"', repo), ['"$pkg" (known only at run time)'])
-        self.assertIn("$(cat (known only at run time)", catalog.aur_builds("yay -S $(cat list)", repo))
+        self.assertEqual(finds("omarchy-pkg-aur-add in-repo", repo)[2], [])
+        self.assertEqual(finds("omarchy-pkg-aur-add aur-only", repo)[2], ["aur-only"])
+        self.assertEqual(finds("yay -S --needed --noconfirm aur-only", repo)[2], ["aur-only"])
+        self.assertEqual(finds("sudo -u x paru -S aur-only", repo)[2], ["aur-only"])
+        self.assertEqual(finds("yay -S in-repo", repo)[2], [])
+        self.assertEqual(finds("yay -Ss term", repo)[2], [])
+        self.assertEqual(finds('omarchy-pkg-aur-add "$pkg"', repo)[2], ["$pkg (known only at run time)"])
+        self.assertEqual(finds('omarchy-launch-floating-terminal-with-presentation "omarchy-pkg-aur-add aur-only"',
+                               repo)[2], ["aur-only"])
 
     def test_check_env(self):
         facts = tempfile.mkdtemp()
@@ -532,6 +573,27 @@ class Signature(unittest.TestCase):
         catalog.sign(self.path, self.home, self.keys[1])
         self.set_keyring(trusted=[self.keys[0], self.keys[1]], keys=[self.keys[0]])
         self.assertIn("bad or missing signature", self.verify())
+
+    def test_two_signers(self):
+        # One signature file holding two signatures by two trusted keys: which one vouches for it is unknown.
+        sig = self.path + ".sig"
+        subprocess.run(["gpg", "--batch", "--no-tty", "--yes", "--homedir", self.home, "--local-user", self.keys[0] + "!",
+                        "--local-user", self.keys[1] + "!", "--detach-sign", "--output", sig, self.path],
+                       check=True, env=catalog.child_env(self.home), capture_output=True)
+        self.set_keyring(trusted=self.keys)
+        self.assertIn("signatures by more than one key", self.verify())
+
+    def test_unreadable_revoked_list_refuses_everything(self):
+        catalog.sign(self.path, self.home, self.keys[0])
+        with open(os.path.join(self.keyring, "grassfield-revoked"), "w") as f:
+            f.write(f"0x{self.keys[0]}\n")
+        self.assertIn("keyring files cannot be read", self.verify())
+
+    def test_deep_signed_json(self):
+        with open(self.path, "w") as f:
+            f.write("[" * 200000 + "]" * 200000)
+        catalog.sign(self.path, self.home, self.keys[0])
+        self.assertIn("signed, but not UTF-8 JSON", self.verify())
 
     def test_oversize_catalog(self):
         with open(self.path, "wb") as f:

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -62,15 +63,37 @@ LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 8
 BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
 # Recipes: what the catalog may not name (ADR-0037 a and e.4). A sync makes the next install a partial upgrade (S12):
-# any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or --sysupgrade on a pacman, yay or paru command line, and
-# a yay with no operation (yay alone is -Syu). A download runs code pacman never checked: curl, wget, git clone, makepkg,
-# yay -G or -B (the setups Omarchy marks as such: GeForce NOW, Battle.net, dev-env), and an AUR build (omarchy-pkg-aur-add
-# or yay -S of a name no repository serves, or of a name known only at run time).
+# any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or --sysupgrade on a pacman, yay or paru command, and a
+# yay or paru with no operation (alone it is -Syu; with a term, an interactive AUR install). A download runs code pacman
+# never checked: curl, wget, makepkg, git clone/pull/fetch, yay or paru -G or -B, the language installers (mise, npm, pipx,
+# cargo, uv and their kin), and an AUR build (omarchy-pkg-aur-add, or yay/paru -S, of a name no repository serves or one
+# known only at run time). The setups Omarchy marks as such (GeForce NOW, Battle.net, dev-env, Hermes) are refused.
+# The text is read as shell, failing closed: line continuations joined, quotes removed, every command found after the
+# wrappers that run it (sudo -u x, env, command, exec, ...), and quoted text with spaces read as commands too (bash -c,
+# sh -c and Omarchy's terminal launchers run their string). The two patterns below are a second, plainer reading.
 SYNC = re.compile(r"\b(pacman|yay|paru)\b[^\n;&|]*?\s(-[A-Za-z]*y[A-Za-z]*|--refresh|--sysupgrade)\b")
-DOWNLOAD = re.compile(r"\b(curl|wget|makepkg)\b|\bgit\s+clone\b|\byay\b[^\n;&|]*\s(-G|--getpkgbuild|-B|--build)\b")
-COMMAND_START = r"(?:^|[;&|(`]|\bthen|\bdo|\bsudo)\s*"
-YAY_COMMAND = re.compile(COMMAND_START + r"yay\b([^\n;&|)]*)", re.M)
-AUR_INSTALL = re.compile(r"\bomarchy-pkg-aur-add\b([^\n;&|)]*)|" + COMMAND_START + r"yay\s+-S[A-Za-z]*\b([^\n;&|)]*)", re.M)
+DOWNLOAD = re.compile(r"\b(curl|wget|makepkg)\b|\bgit\b[^\n;&|]*\s(clone|pull|fetch)\b|"
+                      r"\b(yay|paru)\b[^\n;&|]*\s(-G|--getpkgbuild|-B|--build)\b")
+SHELL_BREAK = re.compile(r"[\n;&|(){}`]")
+SHELL_KEYWORDS = {"if", "then", "do", "else", "elif", "while", "until", "!", "time", "[[", "]]"}
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Programs that run the command after them: (their options that take an argument, how many plain arguments come first).
+WRAPPERS = {
+    "sudo": ({"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-R", "-T", "--user", "--group"}, 0),
+    "doas": ({"-u", "-C"}, 0), "run0": ({"-u", "--user", "-g", "--group", "-D", "--chdir"}, 0), "pkexec": ({"--user"}, 0),
+    "env": ({"-u", "-C", "-S", "--unset", "--chdir"}, 0), "command": (set(), 0), "builtin": (set(), 0),
+    "exec": ({"-a"}, 0), "nohup": (set(), 0), "setsid": (set(), 0), "nice": ({"-n"}, 0), "ionice": ({"-c", "-n"}, 0),
+    "stdbuf": ({"-i", "-o", "-e"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
+    "flock": ({"-w", "-E", "--timeout", "--conflict-exit-code"}, 1), "xargs": ({"-I", "-n", "-P", "-d", "-a", "-L"}, 0),
+    "uwsm-app": (set(), 0),
+}
+PACKAGE_MANAGERS = {"pacman", "yay", "paru"}
+AUR_HELPERS = {"yay", "paru"}
+DOWNLOADERS = {"curl", "wget", "makepkg", "mise", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "pipx", "pip", "pip3",
+               "cargo", "rustup", "uv", "uvx", "go", "gem"}
+# What mise does without fetching anything (where, ls, rm...); every other mise command may install.
+MISE_LOCAL = {"where", "ls", "list", "current", "which", "rm", "remove", "uninstall", "unuse", "activate", "version",
+              "--version"}
 OMARCHY_CALL = re.compile(r"\b(omarchy-[a-z0-9-]+)\b")
 # Omarchy's two launcher makers download an icon (data, never run: ADR-0037 S9), not code; read again at each pin bump.
 DATA_DOWNLOADS = {"bin/omarchy-webapp-install", "bin/omarchy-tui-install"}
@@ -421,8 +444,8 @@ def read_json(path, p):
         with open(path, "rb") as f:
             raw = f.read()
         return json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicate_keys)
-    except (OSError, UnicodeDecodeError, ValueError) as e:
-        p.add(path, f"cannot be read as UTF-8 JSON: {e}")
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
+        p.add(path, f"cannot be read as UTF-8 JSON: {e or type(e).__name__}")
         return None
 
 
@@ -576,28 +599,78 @@ def recipe_closure(omarchy, name):
     return out
 
 
-def aur_builds(code, repo):
+def simple_commands(code, depth=0):
+    """Each simple command of a shell text, as its words after the wrappers that run it (the first word a base name)."""
+    out = []
+    for piece in SHELL_BREAK.split(code.replace("\\\n", " ")):
+        try:
+            words = shlex.split(piece)
+        except ValueError:
+            words = piece.replace('"', " ").replace("'", " ").split()
+        if depth < 4:
+            for i, w in enumerate(words):
+                if any(ch.isspace() for ch in w) or (i and words[i - 1] == "-c"):
+                    out.extend(simple_commands(w, depth + 1))  # bash -c "...", a terminal launcher's command
+        while words:
+            base = os.path.basename(words[0])
+            if words[0] in SHELL_KEYWORDS or ASSIGNMENT.match(words[0]):
+                words = words[1:]
+            elif base in WRAPPERS:
+                takes, plain = WRAPPERS[base]
+                words = words[1:]
+                while words:
+                    if words[0] == "--":
+                        words = words[1:]
+                        break
+                    if words[0].startswith("-"):
+                        words = words[2:] if words[0] in takes else words[1:]
+                    elif ASSIGNMENT.match(words[0]):
+                        words = words[1:]
+                    elif plain:
+                        plain, words = plain - 1, words[1:]
+                    else:
+                        break
+            else:
+                break
+        if words:
+            out.append([os.path.basename(words[0])] + words[1:])
+    return out
+
+
+def aur_names(names, repo):
     """Names an AUR install would build: those no repository serves, or that are known only at run time."""
     built = []
-    for m in AUR_INSTALL.finditer(code):
-        for token in (m.group(1) or m.group(2) or "").split():
-            if token.startswith("-"):
-                continue
-            name = token.strip("'\"")
-            if "$" in name or "`" in name or not PACKAGE.match(name):
-                built.append(f"{token} (known only at run time)")
-            elif repo is not None and name not in repo:
-                built.append(name)
+    for name in names:
+        if "$" in name or "`" in name or not PACKAGE.match(name):
+            built.append(f"{name} (known only at run time)")
+        elif repo is not None and name not in repo:
+            built.append(name)
     return built
 
 
-def bare_yay(code):
-    # yay with no operation is -Syu; with only a search term, an interactive AUR install.
-    for m in YAY_COMMAND.finditer(code):
-        tokens = [t for t in m.group(1).split() if not t.startswith("--")]
-        if not tokens or not re.match(r"^-[SRQGPYDTUFBW]", tokens[0]):
-            return True
-    return False
+def command_findings(code, repo=None):
+    """(syncs, downloads, AUR names built) of a shell text, read command by command."""
+    sync, download, built = False, False, []
+    for words in simple_commands(code):
+        cmd, args = words[0], words[1:]
+        short = [a for a in args if a.startswith("-") and not a.startswith("--") and len(a) > 1]
+        if cmd in PACKAGE_MANAGERS and (any("y" in a[1:] for a in short) or {"--refresh", "--sysupgrade"} & set(args)):
+            sync = True
+        if cmd in AUR_HELPERS:
+            ops = [a for a in args if not a.startswith("--")]
+            if not ops or not re.match(r"^-[SRQGPYDTUFBWVh]", ops[0]):
+                sync = True  # no operation: -Syu; a term alone: an interactive search and AUR install
+            if any(re.match(r"^-[A-Za-z]*[GB]", a) for a in short) or {"--getpkgbuild", "--build"} & set(args):
+                download = True
+            if ops and ops[0].startswith("-S") and not set(ops[0][2:]) & set("silgpc"):
+                built += aur_names([a for a in args if not a.startswith("-")], repo)
+        if cmd == "omarchy-pkg-aur-add":
+            built += aur_names([a for a in args if not a.startswith("-")], repo)
+        if cmd == "git" and {"clone", "pull", "fetch"} & set(args):
+            download = True
+        if cmd in DOWNLOADERS and not (cmd == "mise" and args and args[0] in MISE_LOCAL):
+            download = True
+    return sync, download, built
 
 
 def recipe_problems(omarchy, name, args, repo=None):
@@ -608,12 +681,15 @@ def recipe_problems(omarchy, name, args, repo=None):
     problems = []
     for rel, text in recipe_closure(omarchy, name):
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        if SYNC.search(code) or bare_yay(code):
+        plain = code.replace("\\\n", " ").replace('"', "").replace("'", "")
+        sync, download, built = command_findings(code, repo)
+        if sync or SYNC.search(plain):
             problems.append(f"{name} syncs pacman's databases (through {rel}): a partial upgrade (ADR-0037 e.4)")
-        if DOWNLOAD.search(code) and rel not in DATA_DOWNLOADS:
+        if (download or DOWNLOAD.search(plain)) and rel not in DATA_DOWNLOADS:
             problems.append(f"{name} downloads outside pacman (through {rel}): not offered (ADR-0037 a)")
         # omarchy-pkg-aur-add's own yay -S "$@" is judged where it is called, with the names it is given.
-        built = [] if rel == "bin/omarchy-pkg-aur-add" else aur_builds(code, repo)
+        if rel == "bin/omarchy-pkg-aur-add":
+            built = []
         if built:
             problems.append(f"{name} builds from the AUR (through {rel}): {', '.join(sorted(set(built)))} (ADR-0037 a)")
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -727,12 +803,16 @@ def write_file(path, data):
 
 
 def read_fingerprints(path):
-    """40-hex fingerprints of a keyring list, upper case, whatever follows a ':' and the spaces around ignored."""
+    """The fingerprints of a keyring list (grassfield-trusted: FPR:4:, grassfield-revoked: FPR), upper case, spaces
+    around them ignored. Any other line (a grouped fingerprint, a 0x prefix, a trailing comment) raises ValueError: a list
+    that cannot be read whole is not used, so a revoked entry written another way never leaves its key trusted."""
     out = set()
     for line in read_lines(path):
-        fpr = line.split(":")[0].strip().upper()
-        if FINGERPRINT.match(fpr):
-            out.add(fpr)
+        fpr, _, rest = line.partition(":")
+        fpr = fpr.strip().upper()
+        if not FINGERPRINT.match(fpr) or not re.fullmatch(r"(\d+:)?\s*", rest):
+            raise ValueError(f"{os.path.basename(path)}: a line is not a fingerprint: {line[:60]!r}")
+        out.add(fpr)
     return out
 
 
@@ -752,37 +832,48 @@ def sign(path, homedir, key):
     return sig
 
 
-def verify(directory, keyring_dir, channel, min_serial, p):
-    """What the Store does before it uses a catalog (ADR-0037 g "Signature and verification"), for CI's own check."""
-    path = os.path.join(directory, CATALOG_NAME)
+def signature_problem(path, keyring_dir):
+    """None when path + ".sig" is a good signature by one key that grassfield-trusted lists and grassfield-revoked does
+    not (ADR-0033 d.8, ADR-0037 g), checked by gpgv against the keyring folder; else why not."""
+    if not keyring_dir:
+        return "no keyring folder to check its signature with"
     keyring = os.path.join(keyring_dir, "grassfield.gpg")
     try:
         trusted = read_fingerprints(os.path.join(keyring_dir, "grassfield-trusted"))
         revoked_path = os.path.join(keyring_dir, "grassfield-revoked")
         revoked = read_fingerprints(revoked_path) if os.path.exists(revoked_path) else set()
-    except (OSError, UnicodeDecodeError) as e:
-        p.add(keyring_dir, f"keyring files cannot be read: {e}")
-        return
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        return f"keyring files cannot be read: {e}"
     if not trusted or not os.path.isfile(keyring) or not os.path.getsize(keyring):
-        p.add(keyring_dir, "no trusted key: no catalog is used")
-        return
+        return "no trusted key: nothing signed is used"
     if not os.path.isfile(path) or not os.path.isfile(path + ".sig"):
-        p.add(path, "missing, or its .sig is")
-        return
+        return "missing, or its .sig is"
     with tempfile.TemporaryDirectory() as home:
         run = subprocess.run(["gpgv", "--homedir", home, "--keyring", keyring, "--status-fd", "1",
                               path + ".sig", path], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                              env=child_env(home))
-    signer = None
+    signers = set()
     for line in run.stdout.splitlines():
         fields = line.split()
-        if fields[:2] == ["[GNUPG:]", "VALIDSIG"] and len(fields) >= 12:
-            signer = fields[11].upper()  # VALIDSIG's argument 10: the primary key's fingerprint
-    if run.returncode != 0 or signer is None:
-        p.add(path, f"bad or missing signature (gpgv exit {run.returncode})")
-        return
-    if signer not in trusted or signer in revoked:
-        p.add(path, f"signed by {signer}, which grassfield-trusted does not list or grassfield-revoked does")
+        if fields[:2] == ["[GNUPG:]", "VALIDSIG"]:
+            # VALIDSIG's argument 10: the primary key's fingerprint; a short line counts as an unreadable signer.
+            signers.add(fields[11].upper() if len(fields) >= 12 else "")
+    if run.returncode != 0 or not signers:
+        return f"bad or missing signature (gpgv exit {run.returncode})"
+    if len(signers) > 1:
+        return "signatures by more than one key: which one vouches for it is unknown (as the Store, refused)"
+    signer = signers.pop()
+    if not FINGERPRINT.match(signer) or signer not in trusted or signer in revoked:
+        return f"signed by {signer or '?'}, which grassfield-trusted does not list or grassfield-revoked does"
+    return None
+
+
+def verify(directory, keyring_dir, channel, min_serial, p):
+    """What the Store does before it uses a catalog (ADR-0037 g "Signature and verification"), for CI's own check."""
+    path = os.path.join(directory, CATALOG_NAME)
+    problem = signature_problem(path, keyring_dir)
+    if problem:
+        p.add(path, problem)
         return
     with open(path, "rb") as f:
         raw = f.read()
@@ -791,8 +882,8 @@ def verify(directory, keyring_dir, channel, min_serial, p):
         return
     try:
         obj = json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicate_keys)
-    except (UnicodeDecodeError, ValueError) as e:
-        p.add(path, f"signed, but not UTF-8 JSON: {e}")
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        p.add(path, f"signed, but not UTF-8 JSON: {e or type(e).__name__}")
         return
     validate_catalog(obj, p, channel)
     if not isinstance(obj, dict):
@@ -869,6 +960,6 @@ def main(argv):
 if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
-    except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as e:
+    except (OSError, ValueError, TypeError, RecursionError, subprocess.CalledProcessError) as e:
         print(f"catalog.py: {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(2)
