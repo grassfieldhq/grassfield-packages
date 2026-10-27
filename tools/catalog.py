@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -61,16 +62,69 @@ LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 8
 # Bidirectional formatting characters: plain text never needs them, and they can make a text read other than it is.
 BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
-# Recipes: what the catalog may not name (ADR-0037 a and e.4). A sync makes the next install a partial upgrade (S12):
-# any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or --sysupgrade on a pacman, yay or paru command line, and
-# a yay with no operation (yay alone is -Syu). A download runs code pacman never checked: curl, wget, git clone, makepkg,
-# yay -G or -B (the setups Omarchy marks as such: GeForce NOW, Battle.net, dev-env), and an AUR build (omarchy-pkg-aur-add
-# or yay -S of a name no repository serves, or of a name known only at run time).
-SYNC = re.compile(r"\b(pacman|yay|paru)\b[^\n;&|]*?\s(-[A-Za-z]*y[A-Za-z]*|--refresh|--sysupgrade)\b")
-DOWNLOAD = re.compile(r"\b(curl|wget|makepkg)\b|\bgit\s+clone\b|\byay\b[^\n;&|]*\s(-G|--getpkgbuild|-B|--build)\b")
-COMMAND_START = r"(?:^|[;&|(`]|\bthen|\bdo|\bsudo)\s*"
-YAY_COMMAND = re.compile(COMMAND_START + r"yay\b([^\n;&|)]*)", re.M)
-AUR_INSTALL = re.compile(r"\bomarchy-pkg-aur-add\b([^\n;&|)]*)|" + COMMAND_START + r"yay\s+-S[A-Za-z]*\b([^\n;&|)]*)", re.M)
+# Recipes: what the catalog may name (ADR-0037 a, e.4 and g). The control is the pin: catalog/omarchy.lock records the
+# sha256 of every Omarchy file the catalog's setups run or read, transitively, and check-env refuses any file that differs,
+# is missing or is not pinned, until a person has read it and `catalog.py pin` writes the new pins. A shell cannot be judged
+# by patterns alone, so the scan below is the second line: it runs at pin time (pin refuses to write pins over a finding)
+# and in check-env, to help the person who reads the files. It reads the text as shell and fails closed where it cannot
+# read it: comments dropped, heredoc bodies set apart, every command found after the wrappers that run it (sudo -u x, env,
+# command, exec, timeout...), $(...), `...`, a shell's -c argument and a terminal launcher's command line read as commands
+# too; text it cannot parse, a command named at run time, eval, a script read from a pipe or a heredoc, and pacman's options
+# known only at run time are refused, never guessed.
+# A sync makes the next install a partial upgrade (S12): any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or
+# --sysupgrade or a start of them (--ref, --sysu) on pacman, yay or paru, and a yay or paru with no operation (alone it is
+# -Syu; with a term, an interactive AUR install). pacman -U installs a file from outside the repositories. A download runs
+# code pacman never checked: curl, wget, aria2c, rsync and their kin, makepkg, git clone, pull, fetch or submodule, yay or
+# paru -G or -B, flatpak, the language installers (mise, npm, npx, pipx, pip, cargo, uv, go, gem), an interpreter's own
+# network code, and an AUR build (omarchy-pkg-aur-add, or yay/paru -S, of a name no repository serves or known only at
+# run time). The setups Omarchy marks as such (GeForce NOW, Battle.net, dev-env, Hermes) are refused.
+# The two patterns below are a plainer reading of the same text.
+SYNC = re.compile(r"\b(pacman|yay|paru)\b[^\n;&|]*?\s(-[A-Za-z]*y[A-Za-z]*|--ref[a-z]*|--sysu[a-z]*)\b")
+DOWNLOAD = re.compile(r"\b(curl|wget|makepkg|aria2c)\b|\bgit\b[^\n;&|]*\s(clone|pull|fetch|submodule)\b|"
+                      r"\b(yay|paru)\b[^\n;&|]*\s(-G|--getpkgbuild|-B|--build)\b|"
+                      r"\|\s*(sudo\s+)?(ba|z|da|k)?sh\s*($|[;&|)])")
+SHELL_PUNCT = "();<>|&"
+REDIRECTS = {"<", ">", ">>", "<<", ">&", "<&", "&>", "&>>", ">|", "<>", "<<<"}
+SHELL_OPERATORS = {";", ";;", ";&", ";;&", "&&", "||", "|", "|&", "&", "(", ")", "((", "))"}
+SHELL_OPS_BY_LENGTH = sorted(SHELL_OPERATORS | REDIRECTS, key=len, reverse=True)
+# What prepare() puts in place of $(...), `...`, <(...) and $((...)): code made at run time, read on its own.
+PLACEHOLDER = "__subst"
+SUBST, PROCESS, ARITH = "__subst__", "__subst_process__", "__arith__"
+# A script's own folder, Omarchy's idiom: "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)", read as that folder.
+SELF_DIR = re.compile(r'\$\(cd -- "\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)')
+SHELL_KEYWORDS = {"if", "then", "do", "else", "elif", "while", "until", "!", "time", "{", "}", "fi", "done"}
+# Words that start no command: tests, a loop's list, declarations (their $(...) is still read).
+SHELL_NOT_RUN = {"[", "test", "for", "select", "local", "declare", "typeset", "export", "readonly", "function",
+                 "esac"}
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
+HEREDOC = re.compile(r"(?<!<)<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+SHELL_FROM_INPUT = re.compile(r"(^|[|;&(\s])(sudo\s+)?(sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)(\s+-[A-Za-z-]*)*\s*$")
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
+NETWORK = re.compile(r"\b(urllib|urlopen|requests|http\.client|httpx|aiohttp|pycurl|socket|ftplib|LWP|HTTP::Tiny|"
+                     r"Net::HTTP|open-uri|fetch\s*\()")
+TERMINAL_RUNNERS = {"xdg-terminal-exec"}
+DYNAMIC_OMARCHY = re.compile(r"\bomarchy-[a-z0-9-]*\$")
+# Programs that run the command after them: (their options that take an argument, how many plain arguments come first).
+WRAPPERS = {
+    "sudo": ({"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-R", "-T", "--user", "--group"}, 0),
+    "doas": ({"-u", "-C"}, 0), "run0": ({"-u", "--user", "-g", "--group", "-D", "--chdir"}, 0), "pkexec": ({"--user"}, 0),
+    "env": ({"-u", "-C", "-S", "--unset", "--chdir"}, 0), "command": (set(), 0), "builtin": (set(), 0),
+    "exec": ({"-a"}, 0), "nohup": (set(), 0), "setsid": (set(), 0), "nice": ({"-n"}, 0), "ionice": ({"-c", "-n"}, 0),
+    "stdbuf": ({"-i", "-o", "-e"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
+    "flock": ({"-w", "-E", "--timeout", "--conflict-exit-code"}, 1), "xargs": ({"-I", "-n", "-P", "-d", "-a", "-L"}, 0),
+    "uwsm-app": (set(), 0),
+}
+PACKAGE_MANAGERS = {"pacman", "yay", "paru"}
+AUR_HELPERS = {"yay", "paru"}
+DOWNLOADERS = {"curl", "wget", "aria2c", "axel", "rsync", "scp", "sftp", "lftp", "ftp", "makepkg", "flatpak", "snap",
+               "mise", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "pipx", "pip", "pip3", "cargo", "rustup", "uv",
+               "uvx", "go", "gem"}
+GIT_FETCH = {"clone", "pull", "fetch", "submodule"}
+# What mise does without fetching anything (where, ls, rm...); every other mise command may install.
+MISE_LOCAL = {"where", "ls", "list", "current", "which", "rm", "remove", "uninstall", "unuse", "activate", "version",
+              "--version"}
+PIN = re.compile(r"^file ([0-9a-f]{64}) ([A-Za-z0-9_./-]+)$")
 OMARCHY_CALL = re.compile(r"\b(omarchy-[a-z0-9-]+)\b")
 # Omarchy's two launcher makers download an icon (data, never run: ADR-0037 S9), not code; read again at each pin bump.
 DATA_DOWNLOADS = {"bin/omarchy-webapp-install", "bin/omarchy-tui-install"}
@@ -421,8 +475,8 @@ def read_json(path, p):
         with open(path, "rb") as f:
             raw = f.read()
         return json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicate_keys)
-    except (OSError, UnicodeDecodeError, ValueError) as e:
-        p.add(path, f"cannot be read as UTF-8 JSON: {e}")
+    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
+        p.add(path, f"cannot be read as UTF-8 JSON: {e or type(e).__name__}")
         return None
 
 
@@ -565,7 +619,7 @@ def recipe_closure(omarchy, name):
         if not os.path.isfile(path):
             continue
         with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
+            text = SELF_DIR.sub("${OMARCHY_PATH}/" + os.path.dirname(rel), f.read())
         out.append((rel, text))
         for call in OMARCHY_CALL.findall(text):
             if os.path.isfile(os.path.join(omarchy, "bin", call)):
@@ -576,46 +630,367 @@ def recipe_closure(omarchy, name):
     return out
 
 
-def aur_builds(code, repo):
+def simple_commands(code, problems, notes, depth=0):
+    """Each simple command of a shell text as its words after the wrappers that run it (the first word a base name).
+    problems: what the reading refuses (text it cannot read, code made at run time, a script read from its input);
+    notes: what a person reading the file should look at (a command named by a variable it cannot resolve)."""
+    out = []
+    if depth > 8:
+        problems.append("shell nested too deeply to read")
+        return out
+    subs = []
+    try:
+        code, bodies = split_heredocs(code)
+        tokens = shell_tokens(prepare(code, subs))
+    except ValueError as e:
+        problems.append(f"cannot be read as shell ({e})")
+        return out
+    for quoted, body in bodies:
+        if not quoted:  # an unquoted heredoc runs its $(...) and `...`
+            try:
+                prepare(body, subs, heredoc=True)
+            except ValueError as e:
+                problems.append(f"cannot be read as shell ({e})")
+    for inner in subs:
+        out += simple_commands(inner, problems, notes, depth + 1)
+    literals = literal_assignments(tokens)
+    command, mode = [], None
+    for token in tokens + [";"]:
+        if mode == "redirect":  # a redirection's target: a file, never a command
+            mode = None
+            continue
+        if mode in ("array", "case", "arith", "test"):
+            end = {"array": (")",), "case": (")", "esac"), "arith": ("))",), "test": ("]]",)}[mode]
+            if token in end:
+                mode = None
+            continue
+        if token in REDIRECTS:
+            mode = "redirect"
+            continue
+        lead = [w for w in command if w not in SHELL_KEYWORDS]  # if, while, do, !: what comes after them
+        if not lead and token in ("((", "[["):
+            mode = "arith" if token == "((" else "test"
+            continue
+        if token == "(" and command and ASSIGNMENT.match(command[-1]) and command[-1].endswith("="):
+            mode = "array"
+            continue
+        if token in SHELL_OPERATORS:
+            if lead and lead[0] == "case":
+                mode = "case" if token != ")" else None
+            elif command:
+                out += read_command(command, literals, problems, notes, depth)
+            if token in (";;", ";&", ";;&"):
+                mode = "case"
+            command = []
+            continue
+        command.append(token)
+    return out
+
+
+def split_heredocs(code):
+    """The code without heredoc bodies, and the bodies: (quoted delimiter, text)."""
+    lines, kept, bodies, i = code.split("\n"), [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        kept.append(line)
+        i += 1
+        for m in HEREDOC.finditer(line):
+            quoted, delimiter, strip = bool(m.group(2)), m.group(3), bool(m.group(1))
+            body = []
+            while i < len(lines) and (lines[i].lstrip("\t") if strip else lines[i]) != delimiter:
+                body.append(lines[i])
+                i += 1
+            if i >= len(lines):
+                raise ValueError(f"heredoc {delimiter} never ends")
+            i += 1
+            bodies.append((quoted, "\n".join(body)))
+            if SHELL_FROM_INPUT.search(line[:m.start()]):
+                raise ValueError("a heredoc fed to a shell or an interpreter: code read from its input")
+    return "\n".join(kept), bodies
+
+
+def closing(code, start, depth):
+    """The index where `depth` open parentheses close, from start, quotes and escapes respected; ValueError if never."""
+    i, quote = start, None
+    while i < len(code):
+        ch = code[i]
+        if ch == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise ValueError("a parenthesis never closes")
+
+
+def prepare(code, subs, heredoc=False):
+    """Shell text made easy to split: comments dropped, unquoted line ends as ';', every $(...), `...`, <(...), >(...) and
+    $((...)) replaced by a placeholder word, the code inside added to subs (an arithmetic's own $(...) too). In a heredoc
+    body only the substitutions count. ValueError when a quote or a parenthesis never closes."""
+    out, i, n, quote = [], 0, len(code), None
+    while i < n:
+        ch = code[i]
+        if quote == "'" and not heredoc:
+            out.append(ch)
+            quote = None if ch == "'" else quote
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(" " if code[i + 1] == "\n" and quote is None else ch + code[i + 1])
+            i += 2
+            continue
+        if code.startswith("$((", i):
+            end = closing(code, i + 3, 2)
+            prepare(code[i + 3:end - 1], subs, heredoc=True)  # $(( ... )): only its substitutions run
+            out.append(ARITH)
+            i = end + 1
+            continue
+        if code.startswith("$(", i) or (quote is None and not heredoc and ch in "<>" and code.startswith("(", i + 1)):
+            end = closing(code, i + 2, 1)
+            subs.append(code[i + 2:end])
+            out.append(PROCESS if ch in "<>" else SUBST)
+            i = end + 1
+            continue
+        if ch == "`":
+            end = code.find("`", i + 1)
+            if end < 0:
+                raise ValueError("a ` never closes")
+            subs.append(code[i + 1:end])
+            out.append(SUBST)
+            i = end + 1
+            continue
+        if heredoc:
+            i += 1
+            continue
+        if quote == '"':
+            out.append(ch)
+            quote = None if ch == '"' else quote
+        elif ch in "'\"":
+            quote = ch
+            out.append(ch)
+        elif ch == "#" and (not out or out[-1][-1:] in " \t\n;&|()"):
+            while i < n and code[i] != "\n":
+                i += 1
+            continue
+        elif ch == "\n":
+            out.append(" ; ")
+        else:
+            out.append(ch)
+        i += 1
+    if quote and not heredoc:
+        raise ValueError("a quote never closes")
+    return "".join(out)
+
+
+def shell_tokens(text):
+    """Words and operators (&&, ||, ;;, <<, >&, (, ) ...): shlex's punctuation runs cut into the shell's own operators."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=SHELL_PUNCT)
+    lexer.commenters = ""
+    lexer.whitespace_split = True
+    out = []
+    for token in lexer:
+        if token and set(token) <= set(SHELL_PUNCT):
+            while token:
+                op = next((o for o in SHELL_OPS_BY_LENGTH if token.startswith(o)), token[0])
+                out.append(op)
+                token = token[len(op):]
+        else:
+            out.append(token)
+    return out
+
+
+def literal_assignments(tokens):
+    """{name: values} of the variables a file only ever sets to literal text (pm=pacman); None for one it computes."""
+    seen = {}
+    for t in tokens:
+        m = ASSIGNMENT.match(t)
+        if m and "[" not in t.split("=", 1)[0]:
+            name, value = t.split("=", 1)
+            name = name.rstrip("+")
+            literal = value and not any(c in value for c in "$`") and PLACEHOLDER not in value
+            if name in seen and seen[name] is None:
+                continue
+            seen[name] = (seen.get(name) or set()) | {value} if literal else None
+    return seen
+
+
+def run_time_name(word, literals):
+    """The literal values of a command word that is one variable set only to literal text, else None."""
+    m = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", word)
+    return literals.get(m.group(1)) if m else None
+
+
+def read_command(words, literals, problems, notes, depth):
+    """The commands one simple command runs: itself after its wrappers, and what it hands on."""
+    out = []
+    while words:
+        base = os.path.basename(words[0])
+        if words[0] in SHELL_KEYWORDS or ASSIGNMENT.match(words[0]):
+            words = words[1:]
+        elif words[0] in SHELL_NOT_RUN:
+            return out  # a test, a loop's list, a declaration: words, not a command (their $(...) are read)
+        elif base in WRAPPERS:
+            if base == "command" and len(words) > 1 and words[1] in ("-v", "-V"):
+                return out  # command -v NAME: is NAME there, nothing run
+            takes, plain = WRAPPERS[base]
+            words = words[1:]
+            while words:
+                if words[0] == "--":
+                    words = words[1:]
+                    break
+                if words[0].startswith("-"):
+                    words = words[2:] if words[0] in takes else words[1:]
+                elif ASSIGNMENT.match(words[0]):
+                    words = words[1:]
+                elif plain:
+                    plain, words = plain - 1, words[1:]
+                else:
+                    break
+        else:
+            break
+    if not words:
+        return out
+    cmd = words[0]
+    if PLACEHOLDER in cmd:
+        problems.append("a command made at run time by a substitution")
+        return out
+    if DYNAMIC_OMARCHY.search(cmd):
+        problems.append(f"an Omarchy command named at run time ({cmd})")
+        return out
+    if "$" in cmd:
+        values = run_time_name(cmd, literals)
+        if values:
+            for value in sorted(values):
+                out += read_command([value] + words[1:], literals, problems, notes, depth)
+        else:
+            notes.append(f"a command named at run time ({cmd}): read what it can be")
+        return out
+    words = [os.path.basename(cmd)] + words[1:]
+    base, args = words[0], words[1:]
+    if base == "eval":
+        problems.append("eval: code made at run time")
+    elif base in SHELLS:
+        script = [a for a in args if not a.startswith("-")]
+        if "-c" in args:
+            i = args.index("-c")
+            if i + 1 < len(args):
+                out += simple_commands(args[i + 1], problems, notes, depth + 1)
+        elif not script or "-s" in args or PLACEHOLDER in script[0]:
+            problems.append(f"{base} runs a script from its input or a substitution (a pipe, a redirection, <(...))")
+    elif base in INTERPRETERS:
+        for flag in ("-c", "-e"):
+            if flag in args and args.index(flag) + 1 < len(args) and NETWORK.search(args[args.index(flag) + 1]):
+                words = ["curl"]  # a download written in the interpreter's own language
+        if "-m" in args and args.index("-m") + 1 < len(args) and args[args.index("-m") + 1] in ("pip", "ensurepip"):
+            words = ["curl"]
+        if not [a for a in args if not a.startswith("-")] and "-c" not in args and "-e" not in args:
+            problems.append(f"{base} runs code from its input (a pipe or a redirection)")
+    elif base in ("source", ".") and (not args or PLACEHOLDER in args[0]):
+        problems.append(f"{base} of code made at run time")
+    elif base == "trap" and args and not args[0].startswith("-"):
+        out += simple_commands(args[0], problems, notes, depth + 1)  # run later, when the signal comes
+    elif base.startswith("omarchy-launch-") or base in TERMINAL_RUNNERS:
+        command = [a for a in args if not a.startswith("-")]
+        if len(command) == 1 and any(ch.isspace() for ch in command[0]):
+            out += simple_commands(command[0], problems, notes, depth + 1)  # a terminal launcher's command line
+        elif command:
+            out += read_command(command, literals, problems, notes, depth + 1)
+    out.append(words)
+    return out
+
+
+def aur_names(names, repo):
     """Names an AUR install would build: those no repository serves, or that are known only at run time."""
     built = []
-    for m in AUR_INSTALL.finditer(code):
-        for token in (m.group(1) or m.group(2) or "").split():
-            if token.startswith("-"):
-                continue
-            name = token.strip("'\"")
-            if "$" in name or "`" in name or not PACKAGE.match(name):
-                built.append(f"{token} (known only at run time)")
-            elif repo is not None and name not in repo:
-                built.append(name)
+    for name in names:
+        if "$" in name or "`" in name or not PACKAGE.match(name):
+            built.append(f"{name} (known only at run time)")
+        elif repo is not None and name not in repo:
+            built.append(name)
     return built
 
 
-def bare_yay(code):
-    # yay with no operation is -Syu; with only a search term, an interactive AUR install.
-    for m in YAY_COMMAND.finditer(code):
-        tokens = [t for t in m.group(1).split() if not t.startswith("--")]
-        if not tokens or not re.match(r"^-[SRQGPYDTUFBW]", tokens[0]):
-            return True
-    return False
+def abbreviates(option, *names):
+    """--ref, --sysu: pacman takes any unambiguous start of a long option."""
+    return option.startswith("--") and len(option) >= 5 and any(n.startswith(option[2:]) for n in names)
 
 
-def recipe_problems(omarchy, name, args, repo=None):
-    """repo: the package names Omarchy's stable mirror serves (None in tests that have no facts)."""
+def command_findings(code, repo=None):
+    """(syncs, downloads, AUR names built, problems, notes) of a shell text, read command by command."""
+    sync, download, built, problems, notes = False, False, [], [], []
+    for words in simple_commands(code, problems, notes):
+        cmd, args = words[0], words[1:]
+        short = [a for a in args if a.startswith("-") and not a.startswith("--") and len(a) > 1]
+        if cmd in PACKAGE_MANAGERS:
+            if any("y" in a[1:] for a in short) or any(abbreviates(a, "refresh", "sysupgrade") for a in args):
+                sync = True
+            ops = [a for a in args if a.startswith("-") and not a.startswith("--")]
+            run_time = [a for a in args if "$" in a or "`" in a or PLACEHOLDER in a]
+            if any(a.startswith("-") for a in run_time) or (not ops and run_time):
+                problems.append(f"{cmd}'s options known only at run time")
+            if (ops and ops[0].startswith("-U")) or any(abbreviates(a, "upgrade") for a in args):
+                problems.append(f"{cmd} -U: a package file from outside the repositories")
+        if cmd in AUR_HELPERS:
+            ops = [a for a in args if not a.startswith("--")]
+            if not ops or not re.match(r"^-[SRQGPYDTUFBWVh]", ops[0]):
+                sync = True  # no operation: -Syu; a term alone: an interactive search and AUR install
+            if any(re.match(r"^-[A-Za-z]*[GB]", a) for a in short) or \
+                    any(abbreviates(a, "getpkgbuild", "build") for a in args):
+                download = True
+            if ops and ops[0].startswith("-S") and not set(ops[0][2:]) & set("silgpc"):
+                built += aur_names([a for a in args if not a.startswith("-")], repo)
+        if cmd == "omarchy-pkg-aur-add":
+            built += aur_names([a for a in args if not a.startswith("-")], repo)
+        if cmd == "git" and GIT_FETCH & set(args):
+            download = True
+        if cmd in DOWNLOADERS and not (cmd == "mise" and args and args[0] in MISE_LOCAL):
+            download = True
+    if DYNAMIC_OMARCHY.search(code):
+        problems.append("an Omarchy command named at run time")
+    return sync, download, built, problems, notes
+
+
+def is_shell(rel, text):
+    first = text.split("\n", 1)[0]
+    return rel.endswith(".sh") or (first.startswith("#!") and re.search(r"\b(ba|z|da|k)?sh\b", first) is not None)
+
+
+def recipe_problems(omarchy, name, args, repo=None, notes=None):
+    """What the pattern scan refuses in a recipe and everything it calls or sources (the second line behind the pins,
+    run at pin time to help the person who reads the files). repo: the package names Omarchy's stable mirror serves
+    (None in tests that have no facts). notes: a list for what the person should look at, when given."""
     path = os.path.join(omarchy, "bin", name)
     if not os.path.isfile(path):
         return [f"{name} is not in the pinned Omarchy release"]
     problems = []
     for rel, text in recipe_closure(omarchy, name):
+        if not is_shell(rel, text):
+            continue  # a data or QML file: pinned, never run as shell
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        if SYNC.search(code) or bare_yay(code):
+        plain = code.replace("\\\n", " ").replace('"', "").replace("'", "")
+        sync, download, built, other, seen = command_findings(code, repo)
+        if notes is not None:
+            notes += [f"{rel}: {note}" for note in sorted(set(seen))]
+        if sync or SYNC.search(plain):
             problems.append(f"{name} syncs pacman's databases (through {rel}): a partial upgrade (ADR-0037 e.4)")
-        if DOWNLOAD.search(code) and rel not in DATA_DOWNLOADS:
+        if (download or DOWNLOAD.search(plain)) and rel not in DATA_DOWNLOADS:
             problems.append(f"{name} downloads outside pacman (through {rel}): not offered (ADR-0037 a)")
         # omarchy-pkg-aur-add's own yay -S "$@" is judged where it is called, with the names it is given.
-        built = [] if rel == "bin/omarchy-pkg-aur-add" else aur_builds(code, repo)
+        if rel == "bin/omarchy-pkg-aur-add":
+            built = []
         if built:
             problems.append(f"{name} builds from the AUR (through {rel}): {', '.join(sorted(set(built)))} (ADR-0037 a)")
+        for problem in sorted(set(other)):
+            problems.append(f"{name} cannot be judged (through {rel}): {problem}")
     with open(path, encoding="utf-8", errors="replace") as f:
         own = f.read()
     for arg in args:
@@ -623,8 +998,104 @@ def recipe_problems(omarchy, name, args, repo=None):
             problems.append(f"{name} has no case for '{arg}'")
     return problems
 
+# --- pins: every Omarchy file the catalog's setups run or read (ADR-0037 g) -----------------------------------------------
 
-def check_env(obj, facts, omarchy, p):
+def setup_recipes(obj):
+    """(recipe, args) of every well-formed omarchy-setup of the catalog: its install and its remove recipes."""
+    out = []
+    for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) else []:
+        s = a.get("source") if isinstance(a, dict) else None
+        q = Problems()
+        validate_source(s, q, "app")
+        if q or s.get("kind") != "omarchy-setup":
+            continue
+        out.append((s["install"], s.get("args", [])))
+        out.append((s["remove"], s.get("removeArgs", [])))
+    return out
+
+
+def pin_files(obj, omarchy):
+    """{path relative to the Omarchy checkout: sha256} of every file the setups' recipes run or read, transitively."""
+    files = {}
+    for recipe, _ in setup_recipes(obj):
+        for rel, _ in recipe_closure(omarchy, recipe):
+            files[rel] = sha256_of(os.path.join(omarchy, rel))
+    return files
+
+
+def sha256_of(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def read_pins(lock):
+    """{path: sha256} of the lock's file lines; a file line that does not parse raises ValueError (fail closed)."""
+    pins = {}
+    for line in read_lines(lock):
+        if line.startswith("file"):
+            m = PIN.match(line)
+            if not m or m.group(2) in pins:
+                raise ValueError(f"{os.path.basename(lock)}: not a pin, or a path pinned twice: {line[:80]!r}")
+            pins[m.group(2)] = m.group(1)
+    return pins
+
+
+def pin_problems(obj, omarchy, pins, p):
+    """A file that differs from its pin, is missing or is not pinned: refused until a person reads it (catalog.py pin)."""
+    current = pin_files(obj, omarchy)
+    for rel, digest in sorted(current.items()):
+        if rel not in pins:
+            p.add(f"omarchy {rel}", "run or read by a setup, not pinned: read it, then catalog.py pin")
+        elif pins[rel] != digest:
+            p.add(f"omarchy {rel}", "differs from its pin in omarchy.lock: read the change, then catalog.py pin")
+    for rel in sorted(set(pins) - set(current)):
+        if not os.path.isfile(os.path.join(omarchy, rel)):
+            p.add(f"omarchy {rel}", "pinned but missing from the Omarchy checkout")
+        else:
+            p.add(f"omarchy {rel}", "pinned but no longer run or read by any setup: catalog.py pin removes it")
+
+
+def pin(src, omarchy, facts, p):
+    """Writes the pins of catalog/omarchy.lock for the checkout, after the scan finds nothing; returns the changes."""
+    lock = os.path.join(src, "omarchy.lock")
+    commit = next((line.split()[1] for line in read_lines(lock) if line.startswith("commit ")), None)
+    if os.path.isdir(os.path.join(omarchy, ".git")):
+        head = subprocess.run(["git", "-C", omarchy, "rev-parse", "HEAD"], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL).stdout.strip()
+        if head != commit:
+            p.add(omarchy, f"the checkout is at {head or '?'}, omarchy.lock names {commit}: bump the commit first")
+            return []
+    obj, _ = load_sources(src, p)
+    validate_catalog(obj, p)
+    repo = None
+    if facts:
+        repo = {line.split()[1] for line in read_lines(os.path.join(facts, "repo-packages.txt"))}
+    notes = []
+    for recipe, args in setup_recipes(obj):
+        for problem in recipe_problems(omarchy, recipe, args, repo, notes):
+            p.add(f"recipe {recipe}", problem)
+    if p:
+        return []
+    for note in sorted(set(notes)):
+        print(f"read: {note}")
+    old = read_pins(lock)
+    new = pin_files(obj, omarchy)
+    changes = [f"new      {rel}" for rel in sorted(set(new) - set(old))] + \
+              [f"changed  {rel}" for rel in sorted(rel for rel in set(new) & set(old) if new[rel] != old[rel])] + \
+              [f"removed  {rel}" for rel in sorted(set(old) - set(new))]
+    with open(lock, encoding="utf-8") as f:
+        kept = [line.rstrip("\n") for line in f if not line.startswith("file ")]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    data = "\n".join(kept + [""] + [f"file {new[rel]} {rel}" for rel in sorted(new)]) + "\n"
+    write_file(lock, data.encode("utf-8"))
+    return changes
+
+
+def check_env(obj, facts, omarchy, p, pins=None):
+    """pins: {path: sha256} from omarchy.lock (catalog.py check-env reads it); every pinned file is checked first."""
+    if pins is not None:
+        pin_problems(obj, omarchy, pins, p)
     try:
         repo = {}
         for line in read_lines(os.path.join(facts, "repo-packages.txt")):
@@ -727,12 +1198,16 @@ def write_file(path, data):
 
 
 def read_fingerprints(path):
-    """40-hex fingerprints of a keyring list, upper case, whatever follows a ':' and the spaces around ignored."""
+    """The fingerprints of a keyring list (grassfield-trusted: FPR:4:, grassfield-revoked: FPR), upper case, spaces
+    around them ignored. Any other line (a grouped fingerprint, a 0x prefix, a trailing comment) raises ValueError: a list
+    that cannot be read whole is not used, so a revoked entry written another way never leaves its key trusted."""
     out = set()
     for line in read_lines(path):
-        fpr = line.split(":")[0].strip().upper()
-        if FINGERPRINT.match(fpr):
-            out.add(fpr)
+        fpr, _, rest = line.partition(":")
+        fpr = fpr.strip().upper()
+        if not FINGERPRINT.match(fpr) or not re.fullmatch(r"(\d+:)?\s*", rest):
+            raise ValueError(f"{os.path.basename(path)}: a line is not a fingerprint: {line[:60]!r}")
+        out.add(fpr)
     return out
 
 
@@ -752,37 +1227,50 @@ def sign(path, homedir, key):
     return sig
 
 
-def verify(directory, keyring_dir, channel, min_serial, p):
-    """What the Store does before it uses a catalog (ADR-0037 g "Signature and verification"), for CI's own check."""
-    path = os.path.join(directory, CATALOG_NAME)
+def signature_problem(path, keyring_dir):
+    """None when path + ".sig" is a good signature by one key that grassfield-trusted lists and grassfield-revoked does
+    not (ADR-0033 d.8, ADR-0037 g), checked by gpgv against the keyring folder; else why not."""
+    if not keyring_dir:
+        return "no keyring folder to check its signature with"
     keyring = os.path.join(keyring_dir, "grassfield.gpg")
     try:
         trusted = read_fingerprints(os.path.join(keyring_dir, "grassfield-trusted"))
         revoked_path = os.path.join(keyring_dir, "grassfield-revoked")
         revoked = read_fingerprints(revoked_path) if os.path.exists(revoked_path) else set()
-    except (OSError, UnicodeDecodeError) as e:
-        p.add(keyring_dir, f"keyring files cannot be read: {e}")
-        return
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        return f"keyring files cannot be read: {e}"
     if not trusted or not os.path.isfile(keyring) or not os.path.getsize(keyring):
-        p.add(keyring_dir, "no trusted key: no catalog is used")
-        return
+        return "no trusted key: nothing signed is used"
     if not os.path.isfile(path) or not os.path.isfile(path + ".sig"):
-        p.add(path, "missing, or its .sig is")
-        return
+        return "missing, or its .sig is"
     with tempfile.TemporaryDirectory() as home:
         run = subprocess.run(["gpgv", "--homedir", home, "--keyring", keyring, "--status-fd", "1",
                               path + ".sig", path], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                              env=child_env(home))
-    signer = None
+    signers, plaintext = set(), False
     for line in run.stdout.splitlines():
         fields = line.split()
-        if fields[:2] == ["[GNUPG:]", "VALIDSIG"] and len(fields) >= 12:
-            signer = fields[11].upper()  # VALIDSIG's argument 10: the primary key's fingerprint
-    if run.returncode != 0 or signer is None:
-        p.add(path, f"bad or missing signature (gpgv exit {run.returncode})")
-        return
-    if signer not in trusted or signer in revoked:
-        p.add(path, f"signed by {signer}, which grassfield-trusted does not list or grassfield-revoked does")
+        plaintext = plaintext or fields[:2] == ["[GNUPG:]", "PLAINTEXT"]
+        if fields[:2] == ["[GNUPG:]", "VALIDSIG"]:
+            # VALIDSIG's argument 10: the primary key's fingerprint; a short line counts as an unreadable signer.
+            signers.add(fields[11].upper() if len(fields) >= 12 else "")
+    if run.returncode != 0 or not signers or plaintext:
+        # PLAINTEXT: the .sig is a signed message of its own, never the detached signature of this file.
+        return f"bad or missing signature (gpgv exit {run.returncode}{', a signed message, not a detached signature' if plaintext else ''})"
+    if len(signers) > 1:
+        return "signatures by more than one key: which one vouches for it is unknown (as the Store, refused)"
+    signer = signers.pop()
+    if not FINGERPRINT.match(signer) or signer not in trusted or signer in revoked:
+        return f"signed by {signer or '?'}, which grassfield-trusted does not list or grassfield-revoked does"
+    return None
+
+
+def verify(directory, keyring_dir, channel, min_serial, p):
+    """What the Store does before it uses a catalog (ADR-0037 g "Signature and verification"), for CI's own check."""
+    path = os.path.join(directory, CATALOG_NAME)
+    problem = signature_problem(path, keyring_dir)
+    if problem:
+        p.add(path, problem)
         return
     with open(path, "rb") as f:
         raw = f.read()
@@ -791,8 +1279,8 @@ def verify(directory, keyring_dir, channel, min_serial, p):
         return
     try:
         obj = json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicate_keys)
-    except (UnicodeDecodeError, ValueError) as e:
-        p.add(path, f"signed, but not UTF-8 JSON: {e}")
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        p.add(path, f"signed, but not UTF-8 JSON: {e or type(e).__name__}")
         return
     validate_catalog(obj, p, channel)
     if not isinstance(obj, dict):
@@ -818,11 +1306,11 @@ def verify(directory, keyring_dir, channel, min_serial, p):
 def main(argv):
     ap = argparse.ArgumentParser(prog="catalog.py", description="Grassfield Store catalog (ADR-0037 g)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("validate", "packages", "check-env", "build"):
+    for name in ("validate", "packages", "check-env", "build", "pin"):
         s = sub.add_parser(name)
         s.add_argument("--src", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "catalog"))
-        if name == "check-env":
-            s.add_argument("--facts", required=True)
+        if name in ("check-env", "pin"):
+            s.add_argument("--facts", required=name == "check-env")
             s.add_argument("--omarchy", required=True)
         if name == "build":
             s.add_argument("--channel", required=True, choices=CHANNELS)
@@ -849,13 +1337,19 @@ def main(argv):
         out = build(args.src, args.channel, args.serial, args.out, p)
         if out:
             print(out)
+    elif args.cmd == "pin":
+        changes = pin(args.src, args.omarchy, args.facts, p)
+        if not p:
+            print("\n".join(changes) or "nothing changed")
+            print(f"catalog.py pin: omarchy.lock written ({len(changes)} change(s)); read each new or changed file "
+                  "before committing it")
     else:
         obj, _ = load_sources(args.src, p)
         validate_catalog(obj, p)
         if args.cmd == "packages":
             print("\n".join(wanted_packages(obj)))
         elif args.cmd == "check-env":
-            check_env(obj, args.facts, args.omarchy, p)
+            check_env(obj, args.facts, args.omarchy, p, read_pins(os.path.join(args.src, "omarchy.lock")))
     for item in p.items:
         print(item, file=sys.stderr)
     if p:
@@ -869,6 +1363,6 @@ def main(argv):
 if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
-    except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as e:
+    except (OSError, ValueError, TypeError, RecursionError, subprocess.CalledProcessError) as e:
         print(f"catalog.py: {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(2)

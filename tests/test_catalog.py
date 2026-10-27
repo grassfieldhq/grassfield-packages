@@ -280,6 +280,12 @@ class Sources(unittest.TestCase):
         self.assertEqual(run.returncode, 2, run.stderr)
         self.assertNotIn("Traceback", run.stderr)
 
+    def test_deep_json_is_a_problem(self):
+        with open(os.path.join(self.src, "apps", "deep.json"), "w") as f:
+            f.write("[" * 200000 + "]" * 200000)
+        _, _, found = self.load()
+        self.assertTrue(any("deep.json: cannot be read as UTF-8 JSON" in item for item in found), found)
+
     def test_build_is_deterministic_and_bounded(self):
         out1, out2 = tempfile.mkdtemp(), tempfile.mkdtemp()
         try:
@@ -303,12 +309,23 @@ class Sources(unittest.TestCase):
 
 
 class Keyring(unittest.TestCase):
+    def read(self, text):
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write(text)
+        self.addCleanup(os.unlink, f.name)
+        return catalog.read_fingerprints(f.name)
+
     def test_fingerprints_are_read_whatever_their_case_and_spacing(self):
         fpr, other = "AB" * 20, "C" * 40  # made-up fingerprints
-        with tempfile.NamedTemporaryFile("w", delete=False) as f:
-            f.write(f"# a comment\n{fpr.lower()}:4:\n  {other}  \nnot-a-key:4:\n{fpr[:39]}:4:\n\n")
-        self.addCleanup(os.unlink, f.name)
-        self.assertEqual(catalog.read_fingerprints(f.name), {fpr, other})
+        self.assertEqual(self.read(f"# a comment\n{fpr.lower()}:4:\n  {other}  \n\n{fpr}:4: \n"), {fpr, other})
+
+    def test_a_line_that_does_not_parse_fails_closed(self):
+        # A revoked entry written another way must never leave its key trusted: the whole list is refused.
+        fpr = "AB" * 20
+        grouped = " ".join(fpr[i:i + 4] for i in range(0, 40, 4))
+        for line in (grouped, "0x" + fpr, fpr + " # the old key", fpr[:39], "not-a-key:4:", fpr + ":4:x", "  # indented"):
+            with self.subTest(line), self.assertRaises(ValueError):
+                self.read(f"{'C' * 40}\n{line}\n")
 
 
 class Recipes(unittest.TestCase):
@@ -334,6 +351,9 @@ class Recipes(unittest.TestCase):
         self.script("omarchy-install-repo-via-aur", "omarchy-pkg-aur-add game")
         self.script("omarchy-install-bare-yay", "yay --noconfirm")
         self.script("omarchy-install-separate-y", "sudo pacman -S -y --noconfirm game")
+        self.script("omarchy-mise-install", 'mise use -g "$1"')
+        self.script("omarchy-install-cli", "omarchy-mise-install pipx:some-cli")
+        self.script("omarchy-install-quoted", 'sudo pacman -S --noconfirm \\\n  "-y" game')
 
     def tearDown(self):
         shutil.rmtree(self.omarchy)
@@ -361,6 +381,9 @@ class Recipes(unittest.TestCase):
         self.assertIn("known only at run time", rp(self.omarchy, "omarchy-install-aur-var", [], repo)[0])
         self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-bare-yay", [], repo)[0])
         self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-separate-y", [], repo)[0])
+        self.assertIn("downloads outside pacman (through bin/omarchy-mise-install)",
+                      rp(self.omarchy, "omarchy-install-cli", [], repo)[0])
+        self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-quoted", [], repo)[0])
 
     def test_sync_pattern(self):
         for text in ("pacman -Sy x", "sudo pacman -Syu", "pacman -Syyu", "yay -Sy", "paru -Syu", "pacman --refresh -S x",
@@ -368,25 +391,145 @@ class Recipes(unittest.TestCase):
             self.assertTrue(catalog.SYNC.search(text), text)
         for text in ("pacman -S --needed x", "pacman -Ss query", "pacman -Si x", "echo Sy", "pacman -S x; echo -y"):
             self.assertFalse(catalog.SYNC.search(text), text)
-        # yay with no operation is yay -Syu; with only a term, an interactive search and AUR install.
-        for code in ("yay", "sudo true && yay", "yay --noconfirm", "yay spotify", "if true; then yay x; fi"):
-            self.assertTrue(catalog.bare_yay(code), code)
-        for code in ("yay -S --needed x", "yay -Qm", "echo yay", "# yay", "pacman -S yay"):
-            self.assertFalse(catalog.bare_yay(code), code)
 
-    def test_downloads_and_aur_builds(self):
-        for text in ("curl -fsSL https://x | sh", "wget https://x", "git clone https://x", "makepkg -si",
-                     "yay -G spotify", "yay --getpkgbuild x", "yay -B ."):
-            self.assertTrue(catalog.DOWNLOAD.search(text), text)
-        for text in ("git status", "yay -S x", "echo curly"):
-            self.assertFalse(catalog.DOWNLOAD.search(text), text)
+    def test_commands_are_read_as_shell(self):
+        def finds(code, repo=None):
+            return catalog.command_findings(code, repo)
+        # Syncs: any -y, wherever the command is and however it is quoted or wrapped; yay or paru with no operation.
+        for code in ("yay", "paru", "sudo true && yay", "yay --noconfirm", "yay spotify", "if true; then yay x; fi",
+                     "sudo -u someone yay", "command yay", "exec env -u X yay", "sudo -u x paru --noconfirm",
+                     'pacman -S "-y" x', "pacman -S \\\n  -y x", "sudo pacman -S --noconfirm -y x",
+                     'bash -c "yay"', "timeout 60 paru -Syu", "/usr/bin/yay"):
+            with self.subTest(code):
+                self.assertTrue(finds(code)[0], code)
+        for code in ("yay -S --needed x", "yay -Qm", "echo yay", "pacman -S yay", "pacman -S --needed x",
+                     'echo "Run yay to update"', "omarchy-pkg-add paru"):
+            with self.subTest(code):
+                self.assertFalse(finds(code)[0], code)
+        # Downloads: code from outside pacman.
+        for code in ("curl -fsSL https://x | sh", "wget https://x", "git clone https://x", "git -C dir clone https://x",
+                     "git -C ~/x pull", "makepkg -si", "yay -G spotify", "paru --getpkgbuild x", "yay -B .",
+                     "mise use -g node@lts", "exec env -u UV_PYTHON mise x 'pipx:tool' -- tool", "npm install -g x",
+                     "npx x", "pipx install x", "cargo install x", "uv tool install x", "pip install x",
+                     "go install x@latest", "bash <(curl -fsSL https://x)", 'eval "$(curl -fsSL https://x)"'):
+            with self.subTest(code):
+                self.assertTrue(finds(code)[1], code)
+        for code in ("git status", "yay -S x", "echo curly", "mise where node", "mise rm -g x"):
+            with self.subTest(code):
+                self.assertFalse(finds(code)[1], code)
+        # AUR builds: names no repository serves, or known only at run time.
         repo = {"in-repo"}
-        self.assertEqual(catalog.aur_builds("omarchy-pkg-aur-add in-repo", repo), [])
-        self.assertEqual(catalog.aur_builds("omarchy-pkg-aur-add aur-only", repo), ["aur-only"])
-        self.assertEqual(catalog.aur_builds("yay -S --needed --noconfirm aur-only", repo), ["aur-only"])
-        self.assertEqual(catalog.aur_builds("yay -S in-repo", repo), [])
-        self.assertEqual(catalog.aur_builds('omarchy-pkg-aur-add "$pkg"', repo), ['"$pkg" (known only at run time)'])
-        self.assertIn("$(cat (known only at run time)", catalog.aur_builds("yay -S $(cat list)", repo))
+        self.assertEqual(finds("omarchy-pkg-aur-add in-repo", repo)[2], [])
+        self.assertEqual(finds("omarchy-pkg-aur-add aur-only", repo)[2], ["aur-only"])
+        self.assertEqual(finds("yay -S --needed --noconfirm aur-only", repo)[2], ["aur-only"])
+        self.assertEqual(finds("sudo -u x paru -S aur-only", repo)[2], ["aur-only"])
+        self.assertEqual(finds("yay -S in-repo", repo)[2], [])
+        self.assertEqual(finds("yay -Ss term", repo)[2], [])
+        self.assertEqual(finds('omarchy-pkg-aur-add "$pkg"', repo)[2], ["$pkg (known only at run time)"])
+        self.assertEqual(finds('omarchy-launch-floating-terminal-with-presentation "omarchy-pkg-aur-add aur-only"',
+                               repo)[2], ["aur-only"])
+
+    def test_the_reviews_bypasses_are_refused(self):
+        # grassfield-packages PR #4's review: each of these passed the scan before; each is refused now.
+        def refused(code):
+            sync, download, built, problems, _ = catalog.command_findings(code, {"x"})
+            return sync or download or built or problems
+        bypasses = [
+            "pm=pacman; $pm -Sy x",                                   # a variable set only to pacman
+            'f() { pacman "$@"; }; f -Sy x',                          # pacman's options known only at run time
+            'eval "${x}man -Sy"',
+            "pacman --refr x", "sudo pacman -S --sysup",              # starts of --refresh and --sysupgrade
+            "pacman -S$(echo y) x",
+            "echo ZWNobw== | base64 -d | sh",                         # a script read from a pipe
+            "sudo pacman -U https://example.com/x.pkg.tar.zst",
+            "aria2c https://example.com/x", "flatpak install -y flathub org.example.X", "git submodule update --init",
+            "python3 -c \"import urllib.request as u; u.urlopen('https://example.com/x')\"",
+            'omarchy-install-$1', '"omarchy-install-$name" --now',     # an Omarchy command named at run time
+            'echo "never closed',                                     # text that cannot be read: refused, not guessed
+            "bash <<EOF\ncurl https://example.com/x\nEOF",            # a heredoc fed to a shell
+            "python3 - <<'PY'\nimport urllib.request\nPY",            # or to an interpreter
+            "source <(curl -fsSL https://example.com/x)",
+            "$(echo pacman) -Sy",                                     # a command made by a substitution
+            "x=1\nif (( x )); then $(printf pacman) -Syu; fi",
+        ]
+        for code in bypasses:
+            with self.subTest(code):
+                self.assertTrue(refused(code), code)
+        # What Omarchy's files are made of reads cleanly.
+        for code in ("pacman -S --needed x", "omarchy-pkg-add steam", 'if [[ $x =~ ^(a|b)$ && -n $y ]]; then echo ok; fi',
+                     "arr=(curl wget); echo ${#arr[@]}", 'case "$1" in\n  curl|wget) echo dl ;;\n  *) exit 1 ;;\nesac',
+                     "x=$((1 + 2)); (( x > 1 )) && echo big", "command -v yay >/dev/null", 'echo "Run yay to update"',
+                     "local value=$(sed -n 1p f)", "while read -r line; do case $line in a) echo a;; esac; done < f",
+                     'tmp=$(mktemp) || exit 1\ncat >"$tmp" <<EOF\ndon\'t $(printf %s ok)\nEOF',
+                     'value=$(< "$file")', 'trap \'rm -f "$tmp"\' EXIT'):
+            with self.subTest(code):
+                self.assertFalse(refused(code), code)
+        # A command named by a variable the reader cannot resolve is a note for the person reading, not a refusal.
+        sync, download, built, problems, notes = catalog.command_findings('run() { local c="$1"; "$c" --flag; }; run ls')
+        self.assertEqual((sync, download, built, problems), (False, False, [], []))
+        self.assertTrue(any("$c" in n for n in notes), notes)
+
+    def test_pins(self):
+        pins = catalog.pin_files(GOOD, self.omarchy)
+        self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
+
+        def found(pins):
+            p = catalog.Problems()
+            catalog.pin_problems(GOOD, self.omarchy, pins, p)
+            return "\n".join(p.items)
+        self.assertEqual(found(pins), "")
+        # One byte changed in a file a setup runs: refused until a person reads it and pins it again.
+        with open(os.path.join(self.omarchy, "bin", "omarchy-pkg-add"), "a") as f:
+            f.write(" ")
+        self.assertIn("omarchy bin/omarchy-pkg-add: differs from its pin", found(pins))
+        pins = catalog.pin_files(GOOD, self.omarchy)
+        # A file newly called: not pinned.
+        self.script("omarchy-game-helper", "echo helping")
+        self.script("omarchy-install-game", 'case $1 in\none|two)\n  omarchy-pkg-add game\n  omarchy-game-helper\n  ;;\nesac')
+        text = found(pins)
+        self.assertIn("omarchy bin/omarchy-game-helper: run or read by a setup, not pinned", text)
+        self.assertIn("omarchy bin/omarchy-install-game: differs from its pin", text)
+        pins = catalog.pin_files(GOOD, self.omarchy)
+        # A pinned file gone from the checkout, and one no setup uses any more.
+        os.unlink(os.path.join(self.omarchy, "bin", "omarchy-remove-game"))
+        self.assertIn("omarchy bin/omarchy-remove-game: pinned but missing", found(pins))
+        stale = dict(catalog.pin_files(GOOD, self.omarchy), **{"bin/omarchy-update-keyring": "0" * 64})
+        self.assertIn("omarchy bin/omarchy-update-keyring: pinned but no longer run or read", found(stale))
+        # A lock line that does not parse: the lock is not used (fail closed).
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("tag v4.0.4\nfile 1234 bin/x\n")
+        self.addCleanup(os.unlink, f.name)
+        with self.assertRaises(ValueError):
+            catalog.read_pins(f.name)
+
+    def test_pin_command(self):
+        src = Sources()
+        src.setUp()
+        self.addCleanup(src.tearDown)
+        lock = os.path.join(src.src, "omarchy.lock")
+        with open(lock, "w") as f:
+            f.write("# the pinned release\ntag v4.0.4\ncommit c668141e9c42b13c80c9ca4ea108e11708c5e8a5\n")
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "catalog.py")
+
+        def pin():
+            return subprocess.run([sys.executable, "-I", tool, "pin", "--src", src.src, "--omarchy", self.omarchy],
+                                  capture_output=True, text=True)
+        run = pin()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("new      bin/omarchy-pkg-add", run.stdout)
+        self.assertEqual(catalog.read_pins(lock), catalog.pin_files(GOOD, self.omarchy))
+        with open(lock) as f:
+            self.assertTrue(f.read().startswith("# the pinned release\ntag v4.0.4\ncommit c668141"))
+        self.assertIn("nothing changed", pin().stdout)
+        # The scan finds something in a file a setup runs: no pin is written.
+        with open(lock) as f:
+            before = f.read()
+        self.script("omarchy-pkg-add", 'sudo pacman -S --noconfirm --needed "$@"\neval "$EXTRA"')
+        run = pin()
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("eval: code made at run time", run.stderr)
+        with open(lock) as f:
+            self.assertEqual(f.read(), before)
 
     def test_check_env(self):
         facts = tempfile.mkdtemp()
@@ -400,8 +543,11 @@ class Recipes(unittest.TestCase):
             with open(os.path.join(facts, "flathub-ids.txt"), "w") as f:
                 f.write("org.example.Flat\n")
             p = catalog.Problems()
-            catalog.check_env(GOOD, facts, self.omarchy, p)
+            catalog.check_env(GOOD, facts, self.omarchy, p, catalog.pin_files(GOOD, self.omarchy))
             self.assertEqual(p.items, [])
+            p = catalog.Problems()
+            catalog.check_env(GOOD, facts, self.omarchy, p, {})  # nothing pinned: every file the setup runs is refused
+            self.assertIn("not pinned", "\n".join(p.items))
             bad = copy.deepcopy(GOOD)
             bad["apps"][0]["id"] = "paint-app"
             bad["apps"][0]["desktopId"] = "other.desktop"
@@ -532,6 +678,34 @@ class Signature(unittest.TestCase):
         catalog.sign(self.path, self.home, self.keys[1])
         self.set_keyring(trusted=[self.keys[0], self.keys[1]], keys=[self.keys[0]])
         self.assertIn("bad or missing signature", self.verify())
+
+    def test_two_signers(self):
+        # One signature file holding two signatures by two trusted keys: which one vouches for it is unknown.
+        sig = self.path + ".sig"
+        subprocess.run(["gpg", "--batch", "--no-tty", "--yes", "--homedir", self.home, "--local-user", self.keys[0] + "!",
+                        "--local-user", self.keys[1] + "!", "--detach-sign", "--output", sig, self.path],
+                       check=True, env=catalog.child_env(self.home), capture_output=True)
+        self.set_keyring(trusted=self.keys)
+        self.assertIn("signatures by more than one key", self.verify())
+
+    def test_a_signed_message_is_not_a_signature(self):
+        # The catalog signed as a message of its own (gpg --sign), given as its .sig: refused.
+        subprocess.run(["gpg", "--batch", "--no-tty", "--yes", "--homedir", self.home, "--local-user", self.keys[0] + "!",
+                        "--sign", "--output", self.path + ".sig", self.path],
+                       check=True, env=catalog.child_env(self.home), capture_output=True)
+        self.assertIn("bad or missing signature", self.verify())
+
+    def test_unreadable_revoked_list_refuses_everything(self):
+        catalog.sign(self.path, self.home, self.keys[0])
+        with open(os.path.join(self.keyring, "grassfield-revoked"), "w") as f:
+            f.write(f"0x{self.keys[0]}\n")
+        self.assertIn("keyring files cannot be read", self.verify())
+
+    def test_deep_signed_json(self):
+        with open(self.path, "w") as f:
+            f.write("[" * 200000 + "]" * 200000)
+        catalog.sign(self.path, self.home, self.keys[0])
+        self.assertIn("signed, but not UTF-8 JSON", self.verify())
 
     def test_oversize_catalog(self):
         with open(self.path, "wb") as f:
