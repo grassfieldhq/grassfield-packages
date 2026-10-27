@@ -9,9 +9,10 @@
 #   --tree DIR     written in place (layout below); read for the current snapshots and for a grassfield-keyring built
 #                  before
 #   --gnupghome DIR, --key FPR
-#                  the signing key: a throwaway one in builds and tests, so CI artifacts are never signed by the project's
-#                  key; the owner's key only in the signing job, after M5 (ADR-0033 b.7). A passphrase, when the key has
-#                  one, comes from GRASSFIELD_SIGNING_PASSPHRASE.
+#                  a throwaway signing key, without a passphrase: builds and tests only. The project's key never meets a
+#                  build (ADR-0033 b.7, review M1): the release job signs the tested release build in a container that
+#                  runs no build (sign-release.sh). This script refuses to start while GRASSFIELD_SIGNING_KEY or
+#                  GRASSFIELD_SIGNING_PASSPHRASE is set.
 #   --keyring DIR  grassfield-keyring's sources (default: keyring/ here, keyless until O11; the tests pass their own)
 #   --pkgrel N     GRASSFIELD_PKGREL: a rebuild of the same VERSION (O7), whose notes say "Rebuilt for Hyprland X.Y.Z"
 #
@@ -27,11 +28,13 @@
 #                                            their .sig, and grassfield.db, grassfield.files and grassfield-notes.json with
 #                                            their .sig, a database of this release alone (the publisher takes it as is)
 #   <channel>/x86_64/                        the channel as the hosting serves it (ADR-0033 g, h.2), for CI's artifacts
-#                                            and the tests, made from the release builds as the publisher makes it:
+#                                            and the tests, made from the release builds as the publisher makes it, in
+#                                            its format (scripts/snapshot.py; tools/publish.py once PR #2 is merged):
 #     <package>.pkg.tar.zst and .sig           immutable names: a file name never changes content
-#     snap/<id>/grassfield.db, .files,         never a package older than the current snapshot's
-#       grassfield-notes.json, each with .sig
-#     pointer                                  the current snapshot's id, written last (the edge rule's pointer)
+#     snap/<id>/grassfield.db, .files,         never a package older than the current snapshot's; the current
+#       grassfield-notes.json, each with .sig, snapshot's other files kept (the catalog)
+#       manifest.json
+#     pointer                                  {"snapshot": "<id>"}, written last, only if it has not moved
 #   build-<id>.txt                           the ref, commit, versions, Hyprland, the plugin's ABI stamp, pacman -Q
 # A suffixed VERSION (-betaN, -rcN) goes to beta only (O15); a plain one to stable and beta, whose snapshot keeps a
 # grassfield-desktop that is not older (macOS model, P4). Only packages named grassfield-* without replaces= enter (b.6).
@@ -69,18 +72,17 @@ while (($#)); do
 done
 [[ -n $source_dir && -n $ref && -n $tree && -n $gnupghome && -n $key ]] || usage
 [[ -f /.dockerenv && $EUID == 0 ]] || { echo "build-channel.sh: refused: runs only as root inside a throwaway container" >&2; exit 2; }
+[[ -z ${GRASSFIELD_SIGNING_KEY+x}${GRASSFIELD_SIGNING_PASSPHRASE+x} ]] ||
+  { echo "build-channel.sh: refused: the project's key never meets a build; sign the tested release build with sign-release.sh" >&2; exit 2; }
 [[ -z $pkgrel || $pkgrel =~ ^[1-9][0-9]*$ ]] || die "--pkgrel must be a positive integer"
 [[ $key =~ ^[0-9A-F]{40}$ ]] || die "--key must be a full fingerprint (40 upper-case hex digits)"
 mkdir -p /build "$tree"
 log=/build/build.log
 : >"$log"
 
-sign() { # file -> file.sig, detached and binary, by the signing key
-  local pass=()
-  [[ -n ${GRASSFIELD_SIGNING_PASSPHRASE:-} ]] && pass=(--pinentry-mode loopback --passphrase-fd 0)
-  printf '%s' "${GRASSFIELD_SIGNING_PASSPHRASE:-}" |
-    gpg --homedir "$gnupghome" --batch --no-tty "${pass[@]}" --local-user "$key!" --detach-sign --no-armor --yes \
-      --output "$1.sig" "$1" 2>>"$log" || die "cannot sign $1 (see $log)"
+sign() { # file -> file.sig, detached and binary, by the throwaway key
+  gpg --homedir "$gnupghome" --batch --no-tty --pinentry-mode loopback --passphrase '' --local-user "$key!" --detach-sign \
+    --no-armor --yes --output "$1.sig" "$1" 2>>"$log" </dev/null || die "cannot sign $1 (see $log)"
 }
 
 step "the package set of an Omarchy stable machine (build/pacman.conf)"
@@ -107,9 +109,7 @@ committed_rel=$(cd /build/src/packaging/arch && env -u GRASSFIELD_PKGREL bash -c
 full=${version//-/}-${pkgrel:-$committed_rel}
 echo "commit $commit, VERSION $version, packages $full, channels ${channels[*]}"
 notes=()
-if [[ -n $pkgrel ]]; then
-  notes=(--rebuilt-for "$(pacman -Q hyprland | awk '{print $2}' | sed 's/-[^-]*$//')")
-else
+if [[ -z $pkgrel ]]; then
   n=/build/src/packaging/release-notes/$version
   [[ -f $n.en.txt ]] || die "$n.en.txt is missing: every release has notes (ADR-0033 g, O9)"
   notes=(--en "$n.en.txt")
@@ -172,6 +172,10 @@ for f in "${built[@]}" "$keyring_pkg"; do
 done
 for f in "${built[@]}"; do sign "$f"; done
 printf '%s\n' "${built[@]##*/}" "${keyring_pkg##*/}"
+hyprland=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}') || true
+[[ -n $hyprland ]] || die "hyprland is not installed after makepkg -s: no version for the build record and the rebuild notes"
+# A pkgrel rebuild (O7) says which Hyprland it was rebuilt for: the one makepkg -s installed, without its pkgrel.
+[[ -z $pkgrel ]] || notes=(--rebuilt-for "${hyprland%-*}")
 
 release_build() { # channel -> releases/<channel>/<packages version>/, a database of this release alone
   local c=$1 out=$tree/releases/$1/$full work f
@@ -179,7 +183,8 @@ release_build() { # channel -> releases/<channel>/<packages version>/, a databas
   mkdir -p "$out"
   for f in "${built[@]}" "$keyring_pkg"; do cp "$f" "$f.sig" "$out/"; done
   work=$(mktemp -d /build/db.XXXXXX)
-  # repo-add records each package's .sig in the database; the databases are signed below, by the same key.
+  # Without --include-sigs, repo-add records no signature: pacman fetches each package's .sig beside it. The databases
+  # are signed below, by the same key.
   (cd "$out" && repo-add --quiet "$work/grassfield.db.tar.gz" ./*.pkg.tar.zst) >>"$log" 2>&1 || die "repo-add $c (see $log)"
   cp -L "$work/grassfield.db.tar.gz" "$out/grassfield.db"
   cp -L "$work/grassfield.files.tar.gz" "$out/grassfield.files"
@@ -195,9 +200,9 @@ versions() { # database -> "name version" lines
 }
 
 publish() { # channel: a new snapshot of the tree from the release build, as the channel's publisher makes one
-  local c=$1 dir=$tree/$1/x86_64 rel=$tree/releases/$1/$full prev cur id snap f b name was now
+  local c=$1 dir=$tree/$1/x86_64 rel=$tree/releases/$1/$full prev cur id f b name was now
   mkdir -p "$dir/snap"
-  prev=$(cat "$dir/pointer" 2>/dev/null || true)
+  prev=$(python3 -I "$here/scripts/snapshot.py" current "$dir") || die "$dir/pointer is not a pointer"
   [[ -z $prev || -d $dir/snap/$prev ]] || die "$dir/pointer names a missing snapshot ($prev)"
   if [[ -n $prev ]]; then
     cur=$(versions "$dir/snap/$prev/grassfield.db" | awk '$1 == "grassfield-desktop" { print $2 }')
@@ -219,13 +224,10 @@ publish() { # channel: a new snapshot of the tree from the release build, as the
     fi
     cp "$f" "$f.sig" "$dir/"
   done
-  id=$(date -u +%Y%m%dT%H%M%SZ)-${commit:0:12}
-  snap=$dir/snap/$id
-  [[ ! -e $snap ]] || die "snapshot $snap exists already"
-  mkdir "$snap"
-  for f in grassfield.db grassfield.files grassfield-notes.json; do cp "$rel/$f" "$rel/$f.sig" "$snap/"; done
-  printf '%s\n' "$id" >"$dir/pointer.new"
-  mv -f "$dir/pointer.new" "$dir/pointer"
+  # The databases and notes of the release build, every other file of the current snapshot kept (the catalog), the
+  # manifest, then the pointer if it has not moved.
+  id=$(python3 -I "$here/scripts/snapshot.py" write "$dir" --release "$full" --source "$rel" --expect "$prev") ||
+    die "$c: the snapshot (see above)"
   echo "$c: snapshot $id (grassfield-desktop $full)"
   updated+=("$c:$id")
 }
@@ -245,7 +247,7 @@ abi=$(bsdtar -xOf /build/pkgs/grassfield-compositor-*.pkg.tar.zst usr/lib/grassf
   echo "releases ${channels[*]/%//$full}"
   echo "snapshots ${updated[*]:-none}"
   echo "signing-key $key"
-  echo "hyprland $(pacman -Q hyprland | awk '{print $2}')"
+  echo "hyprland $hyprland"
   echo "plugin-abi ${abi:-unknown}"
   echo "package-set:"
   pacman -Q
