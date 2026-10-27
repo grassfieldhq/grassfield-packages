@@ -38,6 +38,8 @@ jobs:
         channel: [stable, beta]
     # Created and protected by the owner when publishing is enabled (ADR-0033 b.7): the owner approves each run (required
     # reviewers) and only main may deploy to it; it will hold that channel's key and storage credentials. None exists today.
+    # GitHub creates a missing environment, unprotected, the first time a job that names it runs: the owner creates and
+    # protects publish-stable and publish-beta BEFORE `if: false` is removed (owner step, docs/STATE.md).
     environment: publish-${{ matrix.channel }}
     concurrency:
       group: publish-${{ matrix.channel }}
@@ -72,8 +74,8 @@ jobs:
       # release job keeps each tag's there, signed and checked, its database last; a rollback moves withdrawn ones to
       # withdrawn/<channel>/), into /tmp/releases; and run
       #   tools/publish.py --store <the bucket> --channel <channel> --releases /tmp/releases
-      #                    --catalog /tmp/catalog --keyring-dir <grassfield-keyring's files>
-      # which publishes the newest release build when it is newer than the snapshot's, never an older database, and
-      # checks the catalog as the Store does before it publishes anything. The bucket's backend waits for the host.
+      #                    --keyring-dir <grassfield-keyring's files> --catalog /tmp/catalog
+      # which checks every release file's signature and the catalog as the Store does, and publishes the newest release
+      # build when it is newer than the snapshot's, never an older database. The bucket's backend waits for the host.
       # ADR-0033 h.2's deliberate rollback is the owner's, by hand in this concurrency group (scripts/rollback.sh:
       # tools/publish.py --rollback-to).

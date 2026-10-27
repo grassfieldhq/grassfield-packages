@@ -80,12 +80,11 @@ class Publisher(unittest.TestCase):
         for name in ("grassfield.files", "grassfield-notes.json"):
             with open(os.path.join(folder, name), "w") as f:
                 f.write(f"{name} {version}\n")
-        for name in publish.SNAPSHOT_FILES:
-            with open(os.path.join(folder, name + ".sig"), "w") as f:
-                f.write(f"sig of {name} {version}\n")
         for name, v in packages.items():
             with open(os.path.join(folder, f"{name}-{v}-x86_64.pkg.tar.zst"), "w") as f:
                 f.write(f"{name} {v}\n")
+        for name in os.listdir(folder):  # signed as the release build signs them, by the trusted throwaway key
+            catalog.sign(os.path.join(folder, name), self.home, self.keys[0])
         return folder
 
     def catalog(self, serial, row="Tools", channel="stable", key=0):
@@ -105,6 +104,37 @@ class Publisher(unittest.TestCase):
         self.assertIsNotNone(path, p.items)
         catalog.sign(path, self.home, self.keys[key])
         return folder
+
+    def test_release_signatures_are_checked(self):
+        self.release("1.0.0-1")
+        first, _ = self.run_once()
+        cases = {
+            "a garbage .sig": ("grassfield.db.sig", b"not a signature\n", "grassfield.db: bad or missing signature"),
+            # Unsigned bytes in place of the database: refused by its signature before bsdtar ever reads it.
+            "an unverified database": ("grassfield.db", b"not a database\n", "grassfield.db: bad or missing signature"),
+            "a package without .sig": ("grassfield-icons-1.0.1-1-x86_64.pkg.tar.zst.sig", None,
+                                       "grassfield-icons-1.0.1-1-x86_64.pkg.tar.zst: missing, or its .sig is"),
+        }
+        for why, (name, data, expect) in cases.items():
+            with self.subTest(why):
+                folder = self.release("1.0.1-1")
+                path = os.path.join(folder, name)
+                if data is None:
+                    os.unlink(path)
+                else:
+                    with open(path, "wb") as f:
+                        f.write(data)
+                with self.assertRaises(publish.Refused) as e:
+                    self.run_once(now=1793099999)
+                self.assertIn(expect, str(e.exception))
+                shutil.rmtree(folder)
+        # Signed by a key the keyring holds but grassfield-trusted does not list.
+        folder = self.release("1.0.1-1")
+        catalog.sign(os.path.join(folder, "grassfield-notes.json"), self.home, self.keys[1])
+        with self.assertRaises(publish.Refused) as e:
+            self.run_once(now=1793099999)
+        self.assertIn("grassfield-notes.json: signed by", str(e.exception))
+        self.assertEqual(self.store.read_pointer()[0], first)
 
     def run_once(self, catalog=None, now=1793095200):
         with redirect_stdout(io.StringIO()) as out:
@@ -198,11 +228,12 @@ class Publisher(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(os.path.join(self.store.base, "catalog"))), listed)
         self.assertEqual(self.current()["icons"], listed)
 
-    def test_the_command_needs_the_keyring_with_a_catalog(self):
-        with redirect_stdout(io.StringIO()), unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
-            code = publish.main(["--store", self.tmp, "--channel", "stable", "--catalog", self.catalog(100)])
-        self.assertEqual(code, 2)
-        self.assertIn("--catalog needs --keyring-dir", err.getvalue())
+    def test_the_command_needs_the_keyring(self):
+        with redirect_stdout(io.StringIO()), unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err, \
+                self.assertRaises(SystemExit) as e:
+            publish.main(["--store", self.tmp, "--channel", "stable", "--catalog", self.catalog(100)])
+        self.assertEqual(e.exception.code, 2)
+        self.assertIn("--keyring-dir", err.getvalue())
 
     def test_db_naming_an_older_package_is_refused(self):
         self.release("1.0.1-1", {"grassfield-desktop": "1.0.1-1", "grassfield-icons": "1.0.1-1"})
@@ -251,8 +282,10 @@ class Publisher(unittest.TestCase):
         self.release("1.0.0-1")
         self.run_once()
         self.release("1.0.1-1")
-        with open(os.path.join(self.releases, "1.0.1-1", "grassfield-desktop-1.0.0-1-x86_64.pkg.tar.zst"), "w") as f:
+        changed = os.path.join(self.releases, "1.0.1-1", "grassfield-desktop-1.0.0-1-x86_64.pkg.tar.zst")
+        with open(changed, "w") as f:
             f.write("other bytes under a published name\n")
+        catalog.sign(changed, self.home, self.keys[0])  # well signed: the immutable name alone refuses it
         with self.assertRaises(publish.Refused) as e:
             self.run_once(now=1793099999)
         self.assertIn("already published with other content", str(e.exception))
@@ -264,7 +297,7 @@ class Publisher(unittest.TestCase):
         self.release("1.0.1-1")
         second, _ = self.run_once(self.catalog(100), now=1793095300)
         with redirect_stdout(io.StringIO()) as out:
-            back = publish.rollback(self.store, first, now=1793095400)
+            back = publish.rollback(self.store, first, now=1793095400, keyring_dir=self.keyring)
         self.assertNotIn(back, (first, second))
         self.assertIn("rollback to " + first, out.getvalue())
         m = self.current()
@@ -290,17 +323,17 @@ class Publisher(unittest.TestCase):
         second, _ = self.run_once(now=1793095300)
         for target, why in ((second, "not an older snapshot"), ("20991231T000000Z-000000000000", "no snapshot"),):
             with self.subTest(why), self.assertRaises(publish.Refused) as e:
-                publish.rollback(self.store, target, now=1793095400)
+                publish.rollback(self.store, target, now=1793095400, keyring_dir=self.keyring)
             self.assertIn(why, str(e.exception))
         with redirect_stdout(io.StringIO()):
-            back = publish.rollback(self.store, first, now=1793095400)
+            back = publish.rollback(self.store, first, now=1793095400, keyring_dir=self.keyring)
         with self.assertRaises(publish.Refused) as e:  # the newer snapshot is not older than the rollback
-            publish.rollback(self.store, second, now=1793095500)
+            publish.rollback(self.store, second, now=1793095500, keyring_dir=self.keyring)
         self.assertIn("not older than the current", str(e.exception))
         self.assertEqual(self.store.read_pointer()[0], back)
         with redirect_stdout(io.StringIO()), unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
-            code = publish.main(["--store", self.tmp, "--channel", "stable", "--rollback-to", first,
-                                 "--releases", self.releases])
+            code = publish.main(["--store", self.tmp, "--channel", "stable", "--keyring-dir", self.keyring,
+                                 "--rollback-to", first, "--releases", self.releases])
         self.assertEqual(code, 2)
         self.assertIn("--rollback-to publishes an older snapshot again, nothing else", err.getvalue())
 

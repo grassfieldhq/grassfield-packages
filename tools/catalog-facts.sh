@@ -49,13 +49,29 @@ mapfile -t wanted < <(python3 -I "$tool" packages --src "$src")
   fi
 } >"$out/app-entries.txt"
 
-# Arch's AppStream: the package file and its signature from pacman's own mirror, checked by pacman's keyring and rule.
+# Arch's AppStream: the package file and its signature from pacman's own mirror, checked by pacman's keyring and rule,
+# read from gpg itself on a copy of the keyring: pacman-key --verify exits 0 for a good signature by any key of the keyring,
+# trusted or not, and for a disabled one (grassfield ADR-0037 S19). One good detached signature, its key fully or
+# ultimately valid and not disabled, nothing else.
+pacman_trusted() (
+  # A subshell: its temporary home goes with it, whatever the outcome.
+  home=$(mktemp -d)
+  trap 'rm -rf "$home"' EXIT
+  cp /etc/pacman.d/gnupg/pubring.* /etc/pacman.d/gnupg/trustdb.gpg "$home"/ 2>/dev/null || exit 1
+  status=$(gpg --homedir "$home" --batch --no-tty --no-autostart --status-fd 1 --verify "$1" "$2" 2>/dev/null) || exit 1
+  grep -qE '^\[GNUPG:\] (PLAINTEXT|BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|NO_PUBKEY)( |$)' <<<"$status" && exit 1
+  [[ $(grep -c '^\[GNUPG:\] VALIDSIG ' <<<"$status") == 1 ]] || exit 1
+  grep -qE '^\[GNUPG:\] TRUST_(FULLY|ULTIMATE)( |$)' <<<"$status" || exit 1
+  signer=$(awk '$2 == "VALIDSIG" {print $12}' <<<"$status")
+  gpg --homedir "$home" --batch --no-autostart --with-colons --list-keys "$signer" 2>/dev/null |
+    awk -F: '$1 == "pub" {n++; ok = ($2 == "f" || $2 == "u") && $12 !~ /D/} END {exit !(n == 1 && ok)}'
+)
 cache=$(mktemp -d)
 url=$(pacman -Sp archlinux-appstream-data | tail -1)
 pkg=$cache/$(basename "$url")
 curl -fsS --max-time 300 -o "$pkg" "$url"
 curl -fsS --max-time 60 -o "$pkg.sig" "$url.sig"
-pacman-key --verify "$pkg.sig" "$pkg" >/dev/null 2>&1 || { echo "catalog-facts.sh: $(basename "$pkg"): bad signature" >&2; exit 1; }
+pacman_trusted "$pkg.sig" "$pkg" || { echo "catalog-facts.sh: $(basename "$pkg"): not one good signature by a key pacman trusts fully" >&2; exit 1; }
 {
   echo "# $(basename "$pkg"): package, AppStream id, component type"
   for xml in $(bsdtar -tf "$pkg" | grep -E '^usr/share/swcatalog/xml/[^/]+\.xml\.gz$'); do

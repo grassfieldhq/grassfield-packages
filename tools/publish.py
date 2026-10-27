@@ -2,18 +2,19 @@
 """The one publisher of a channel (grassfield ADR-0033 h.2 as amended by ADR-0037 g). Written and disabled: CI never runs it
 until the owner decides, after the M5 legal review (CLAUDE.md). Standard library, plus pacman's `vercmp` and `bsdtar`.
 
-  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR [--catalog DIR --keyring-dir DIR]
+  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR --keyring-dir DIR [--catalog DIR]
              [--keep-days 7]
-  publish.py --store DIR --channel stable [--arch x86_64] --rollback-to SNAPSHOT
+  publish.py --store DIR --channel stable [--arch x86_64] --keyring-dir DIR --rollback-to SNAPSHOT
 
 One run publishes the latest state, never what started it (GitHub cancels a waiting run when a newer one queues, and each
 tag is built once): the newest release built and signed for the channel (--releases holds one folder per version, as each
 tag's build left it) and the catalog built from main's head (--catalog). It
   1. reads the pointer and the current snapshot's manifest;
   2. builds the new snapshot from it: the newest release when it is newer than the snapshot's, the catalog when its content
-     differs (serial and build time aside) and its serial is higher, the rest kept; nothing new, nothing written. The
-     catalog must first pass the Store's own checks for this channel (tools/catalog.py verify: a trusted signature, the
-     rules, the icons); only the icons it lists are uploaded;
+     differs (serial and build time aside) and its serial is higher, the rest kept; nothing new, nothing written. Every
+     file of the release (databases, notes, packages) must be signed by one key grassfield-trusted lists and
+     grassfield-revoked does not, and the catalog must pass the Store's own checks for this channel (tools/catalog.py
+     verify: that signature, the rules, the icons); only the icons it lists are uploaded;
   3. refuses to go backwards: a grassfield.db naming an older version of a package than the current one, an older release
      or a lower serial are never published, except ADR-0033 h.2's deliberate rollback (--rollback-to: a new snapshot with
      an older snapshot's databases and notes, the rest kept; scripts/rollback.sh withdraws the newer release builds
@@ -201,15 +202,22 @@ def plan(store, current, releases, catalog, keyring_dir=None):
     if version is not None:
         order = 1 if old["release"] is None else vercmp(version, old["release"])
         if order > 0:
+            packages = sorted(f for f in os.listdir(folder) if PACKAGE_FILE.match(f))
+            # Every file the release brings, signed by a key the Store and pacman trust, before anything is read (bsdtar
+            # never sees an unverified database) or uploaded.
+            for name in list(SNAPSHOT_FILES) + [f for f in packages if not f.endswith(".sig")]:
+                problem = catalogtool.signature_problem(os.path.join(folder, name), keyring_dir)
+                if problem:
+                    raise Refused(f"release {version}: {name}: {problem}")
             if old["release"] is not None:
                 new_db, old_db = db_versions(os.path.join(folder, "grassfield.db")), db_versions(files["grassfield.db"])
                 for name, was in old_db.items():
                     if name in new_db and vercmp(new_db[name], was) < 0:
                         raise Refused(f"release {version}: grassfield.db has {name} {new_db[name]}, older than the "
-                                      f"published {was} (a rollback is a new release with a higher pkgrel)")
+                                      f"published {was} (a rollback is a new release with a higher pkgrel, or "
+                                      "ADR-0033 h.2's deliberate --rollback-to)")
             for name in SNAPSHOT_FILES:
                 files[name], files[name + ".sig"] = os.path.join(folder, name), os.path.join(folder, name + ".sig")
-            packages = sorted(f for f in os.listdir(folder) if PACKAGE_FILE.match(f))
             packages = [(f, os.path.join(folder, f)) for f in packages]
             manifest["release"] = version
             changed.append(f"release {version}")
@@ -279,13 +287,15 @@ def commit(store, tag, files, manifest, now=None):
     return None
 
 
-def rollback(store, target, now=None):
+def rollback(store, target, now=None, keyring_dir=None):
     """ADR-0033 h.2's deliberate rollback, the one exception to "never backwards": a NEW snapshot with the databases and
     notes of an older snapshot of the channel (target) and every other file of the current one (the catalog); never the
     pointer moved back (R4: a client already on the newer snapshot would then fail every update). The files keep their
     signatures, so no key is needed. Clients that installed the newer release keep it (pacman does not downgrade).
     The caller withdraws the newer release builds first, so that a later run does not publish them again
-    (scripts/rollback.sh). Returns the new snapshot id."""
+    (scripts/rollback.sh). As a publication does, it checks the signatures of the databases and notes it reads or
+    publishes against keyring_dir before bsdtar reads a database (a snapshot signed by a key revoked since is refused).
+    Returns the new snapshot id."""
     with store.run_lock():
         for _ in range(ATTEMPTS):
             current, tag = store.read_pointer()
@@ -296,6 +306,11 @@ def rollback(store, target, now=None):
             except FileNotFoundError:
                 raise Refused(f"no snapshot {target} in {store.channel}")
             cur = store.manifest(current)
+            for snap in (target, current):
+                for name in SNAPSHOT_FILES:
+                    problem = catalogtool.signature_problem(store.snapshot_path(snap, name), keyring_dir)
+                    if problem:
+                        raise Refused(f"snapshot {snap}: {name}: {problem}")
             was = db_versions(store.snapshot_path(current, "grassfield.db")).get("grassfield-desktop")
             back = db_versions(store.snapshot_path(target, "grassfield.db")).get("grassfield-desktop")
             if not was or not back or vercmp(back, was) >= 0:
@@ -330,8 +345,10 @@ def main(argv):
     ap.add_argument("--arch", default="x86_64", choices=("x86_64",))
     ap.add_argument("--releases", help="one folder per built version: grassfield.db, .files, the notes, packages, .sig")
     ap.add_argument("--catalog", help="the catalog built from main's head and signed for this channel")
-    ap.add_argument("--keyring-dir", help="the keyring folder the Store verifies with (grassfield.gpg, grassfield-trusted, "
-                                          "grassfield-revoked): required with --catalog")
+    ap.add_argument("--keyring-dir", required=True,
+                    help="the keyring folder the Store and pacman trust (grassfield.gpg, grassfield-trusted, "
+                         "grassfield-revoked): every release file, the catalog and a rollback's files are checked "
+                         "against it")
     ap.add_argument("--rollback-to", metavar="SNAPSHOT",
                     help="ADR-0033 h.2's deliberate rollback to an older snapshot (scripts/rollback.sh withdraws the newer "
                          "release builds first); not with --releases or --catalog")
@@ -341,16 +358,13 @@ def main(argv):
         if shutil.which(tool) is None:
             print(f"publish: {tool} is missing (pacman, libarchive)", file=sys.stderr)
             return 2
-    if args.catalog and not args.keyring_dir:
-        print("publish: --catalog needs --keyring-dir (the catalog is checked as the Store checks it)", file=sys.stderr)
-        return 2
     if args.rollback_to and (args.releases or args.catalog):
         print("publish: --rollback-to publishes an older snapshot again, nothing else", file=sys.stderr)
         return 2
     store = LocalStore(args.store, args.channel, args.arch)
     try:
         if args.rollback_to:
-            rollback(store, args.rollback_to)
+            rollback(store, args.rollback_to, keyring_dir=args.keyring_dir)
         else:
             publish(store, args.releases, args.catalog, keyring_dir=args.keyring_dir)
     except Refused as e:

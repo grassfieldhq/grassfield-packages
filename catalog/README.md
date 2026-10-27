@@ -12,7 +12,7 @@ until the owner decides (CLAUDE.md).
 | `sections/<id>.json` | one section each, with `"order"` (an integer, sorted ascending, dropped by the build); `discover` comes first (at most 8 sections, 12 blocks each) |
 | `apps/<id>.json` | one app each, the file named after its id; the id is the app's AppStream id when it has one, spelled exactly as AppStream spells it (CI checks it) |
 | `icons/<name>.png`, `icons/<name>.json` | an icon for an app with no metadata, and its `{"license", "origin", "review": "needs legal review"}` |
-| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version) |
+| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version), and the pins: the SHA-256 of every Omarchy file the setups run or read |
 
 ## Adding an app
 1. Pick its source, in this order when it has several: an Omarchy setup (it configures what Omarchy configures), an Arch or
@@ -52,3 +52,17 @@ python3 -I tools/catalog.py check-env --facts /tmp/facts --omarchy <omarchy>
 ```
 CI (`.github/workflows/catalog.yml`) runs all of them, then builds both channels, signs them with a throwaway key made in
 its container, verifies them as the Store does, and keeps the result as an artifact for 7 days.
+
+## A setup, or a new Omarchy release: the pins
+A setup runs Omarchy's own files: its recipe and everything the recipe calls or sources. CI does not try to judge those
+files by reading them; it refuses any of them whose SHA-256 differs from its pin in `omarchy.lock`, is missing, or is not
+pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bump `tag` and `commit` together):
+1. Gather the facts (above), then run, with an Omarchy checkout at the commit `omarchy.lock` names:
+   `python3 -I tools/catalog.py pin --omarchy <omarchy> --facts /tmp/facts`.
+2. `pin` first runs the scan, the second line: it refuses to write any pin when a file syncs pacman's databases, downloads
+   code, builds from the AUR, uses `eval`, reads a script from a pipe or a heredoc, names a command it cannot know (an
+   Omarchy command named at run time, a command made by a substitution) or cannot be read as shell. Such a setup is not
+   offered.
+3. Otherwise it writes the pins and lists every new, changed and removed file, and the commands it could not resolve
+   ("read: …"). Read each listed file before committing `omarchy.lock`: the pin says nobody changed it, not that it is
+   safe.
