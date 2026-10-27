@@ -2,6 +2,7 @@
 # Build one Grassfield release into the channel tree of the [grassfield] repository (grassfield ADR-0033 e, f, g, h.2).
 #
 #   build-channel.sh --source DIR --ref REF --tree DIR --gnupghome DIR --key FPR [--keyring DIR] [--pkgrel N]
+#                    [--channel stable|beta]
 #
 #   --source DIR   a grassfield checkout with its history; it is cloned, nothing in it changes
 #   --ref REF      the tag (or, for tests, the commit) to build; its VERSION decides the channels
@@ -12,6 +13,8 @@
 #                  one, comes from GRASSFIELD_SIGNING_PASSPHRASE.
 #   --keyring DIR  grassfield-keyring's sources (default: keyring/ here, keyless until O11; the tests pass their own)
 #   --pkgrel N     GRASSFIELD_PKGREL: a rebuild of the same VERSION (O7), whose notes say "Rebuilt for Hyprland X.Y.Z"
+#   --channel C    only that channel (the serialized publisher of each channel, publish.yml); refused when VERSION does not
+#                  go to it
 #
 # Runs only as root inside a throwaway Arch container (it refuses elsewhere): it replaces pacman.conf with Omarchy
 # stable's package set (build/pacman.conf, ADR-0033 f), installs the build dependencies, creates the user `builder` and
@@ -30,9 +33,9 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-source_dir="" ref="" tree="" gnupghome="" key="" keyring=$here/keyring pkgrel=""
+source_dir="" ref="" tree="" gnupghome="" key="" keyring=$here/keyring pkgrel="" only=""
 usage() {
-  echo "usage: build-channel.sh --source DIR --ref REF --tree DIR --gnupghome DIR --key FPR [--keyring DIR] [--pkgrel N]" >&2
+  echo "usage: build-channel.sh --source DIR --ref REF --tree DIR --gnupghome DIR --key FPR [--keyring DIR] [--pkgrel N] [--channel C]" >&2
   exit 2
 }
 die() {
@@ -51,6 +54,7 @@ while (($#)); do
     --key) key=$2 ;;
     --keyring) keyring=$2 ;;
     --pkgrel) pkgrel=$2 ;;
+    --channel) only=$2 ;;
     *) usage ;;
   esac
   shift 2
@@ -58,6 +62,7 @@ done
 [[ -n $source_dir && -n $ref && -n $tree && -n $gnupghome && -n $key ]] || usage
 [[ -f /.dockerenv && $EUID == 0 ]] || { echo "build-channel.sh: refused: runs only as root inside a throwaway container" >&2; exit 2; }
 [[ -z $pkgrel || $pkgrel =~ ^[1-9][0-9]*$ ]] || die "--pkgrel must be a positive integer"
+[[ -z $only || $only =~ ^(stable|beta)$ ]] || die "--channel is stable or beta"
 [[ $key =~ ^[0-9A-F]{40}$ ]] || die "--key must be a full fingerprint (40 upper-case hex digits)"
 mkdir -p /build "$tree"
 log=/build/build.log
@@ -91,6 +96,10 @@ version=$(tr -d '[:space:]' </build/src/VERSION)
 # A tag names its VERSION: vX.Y.Z[-betaN|-rcN].
 [[ ! $ref =~ ^v[0-9] || $ref == "v$version" ]] || die "tag $ref does not match VERSION $version"
 if [[ $version == *-* ]]; then channels=(beta); else channels=(stable beta); fi
+if [[ -n $only ]]; then
+  [[ " ${channels[*]} " == *" $only "* ]] || die "VERSION $version does not go to the $only channel"
+  channels=("$only")
+fi
 committed_rel=$(cd /build/src/packaging/arch && env -u GRASSFIELD_PKGREL bash -c 'source ./PKGBUILD >/dev/null 2>&1; printf %s "$pkgrel"')
 full=${version//-/}-${pkgrel:-$committed_rel}
 echo "commit $commit, VERSION $version, packages $full, channels ${channels[*]}"
