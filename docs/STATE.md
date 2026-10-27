@@ -93,6 +93,24 @@ Last updated: 2026-10-27
     TRUST_FULLY or TRUST_ULTIMATE, the key not disabled) instead of `pacman-key --verify`, whose exit code is 0 for any key
     of the keyring, trusted or not (grassfield ADR-0037 S19). Arch's real package passes it (1604 components read).
 
+- 2026-10-27, PR #4 merged with PASS (b4032fb). The five MINORs its merge comment left, before publishing is enabled
+  (branch restarted from main, its own PR):
+  1. The closure: Omarchy's other names for its folder (`$OMARCHY_INSTALL`, `/usr/share/omarchy/`,
+     `~/.local/share/omarchy/`, `$HOME/.local/share/omarchy/`) are followed; the scan refuses an Omarchy command or a
+     sourced file the closure did not follow (a split name like `"omar""chy-x"` or `omar\chy-x`, a path with a variable
+     segment, a file outside Omarchy's folder).
+  2. A backslash at a line's end joins the lines with nothing, as bash does (`pac\<newline>man -Sy` is a sync).
+  3. `gum ... -- COMMAND`, `systemd-run`, `runuser`, `chroot`, `unshare` and `watch` are read as wrappers; pacman's
+     arguments made by a substitution (`pacman -S $(cat list)`) are refused; from an array or the script's own arguments
+     (`"${pkgs[@]}"`, `"$@"`), a note for the person reading.
+  4. `pin` reads the checkout's commit from `.git` or `.commit` (as catalog-facts.sh does) and refuses when neither
+     names the lock's commit.
+  5. The comment says what the scan does with a command named by a variable: resolved, or listed, not refused.
+  The pin step on v4.0.4 in a throwaway container: `nothing changed` (the same 43 files), 7 notes to read.
+- Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
+  CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
+  a plain message.
+
 ## Tests run
 - Step 1 follow-up: `tests/run-in-container.sh --network host`: `Ran 46 tests … OK`, exit 0, nothing skipped (47 with the
   parity commit, in the CI replay). The CI
