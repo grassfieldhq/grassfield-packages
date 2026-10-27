@@ -1,0 +1,11 @@
+# Built output is never committed: packages, signatures, repository databases, caches.
+*.pkg.tar*
+*.sig
+*.db
+*.db.tar*
+*.files
+*.files.tar*
+/out/
+/repo/
+/cache/
+/.dev/
