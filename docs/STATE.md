@@ -75,11 +75,12 @@ Last updated: 2026-10-27
       - the keyring is compared with `keyring/` as a whole package;
       - a refused rollback withdraws nothing.
     - Counter-review of 627e70e: minors 1-3 FIXED; new MINOR (a symbolic link passed keyring-check as an empty file)
-      fixed in e995289; the evidence of the long runs still to record. Every test is run at e995289 (below).
+      fixed in e995289. Every test below was run at e995289 and its output is recorded.
   - Tests at e995289 (outputs, commands and commits in `docs/evidence/step1b-2026-10-27/`; grassfield main ae121e8):
     - `tests/run-in-container.sh`: `Ran 52 tests … OK`, nothing skipped;
     - `tests/release-build.sh`: exit 0, 34 checks, 0 failures;
-    - `tests/e2e.sh`, the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): running when this was committed, recorded by the next commit;
+    - `tests/e2e.sh`, the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): exit 0, 44
+      checks, 0 failures;
     - `ci-path.sh`, with `keyring/` as after O11: exit 0, 23 checks, 0 failures;
     - `tests/smoke.sh` on its two builds: exit 0, 6 checks, 0 failures each;
     - gitleaks on origin/main..HEAD and the tree: no leaks found; GitHub's `check` job green on each push.
