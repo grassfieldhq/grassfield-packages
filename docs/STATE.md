@@ -3,6 +3,22 @@ Last updated: 2026-10-27
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
+- 2026-10-27 (cloud session, branch claude/pensive-thompson-fhk5um, owner brief "Grassfield Store", step 0, docs only): the
+  repository's second role, the Store catalog Grassfield edits, added to README.md and CLAUDE.md. Its contract is grassfield
+  ADR-0037 (Proposed, grassfieldhq/grassfield PR #15; this repository's PR #1): `grassfield-catalog.v1.json` + `.sig` + `catalog/<sha256>.png` in each
+  channel's snapshot beside the repository, signed with the repository's key, verified by the Store like the release notes
+  (ADR-0033 d.8). No code here before the opus PASS of ADR-0037.
+- 2026-10-27, after the first opus review (FAIL, 3 MAJOR, in grassfield PR #15): the publication of both repositories' files
+  is one serialized publisher per channel, building from the current snapshot, never backwards, with a conditional pointer
+  write (MAJOR 3; ADR-0033 h.2 amended in grassfield PR #15); publishers' icons for apps without metadata (owner, ST10) with
+  their licence and origin, needs legal review; CI refuses recipes that sync. README and CLAUDE.md updated.
+- 2026-10-27, after the opus counter-review (FAIL, 1 MAJOR on grassfield's side, in grassfield PR #15): each publishing run
+  publishes the latest state (the newest release built for the channel, the catalog of `main`'s head), since GitHub cancels
+  a waiting run in a concurrency group when a newer one queues and each tag is built once; CI also refuses a `repo` app whose
+  package owns no application entry (ADR-0037 SD1). README and CLAUDE.md updated. The owner's working rule of 2026-10-27
+  (decisions taken in the session under "macOS first, no technical step for the user", recorded in ADR-0037 as SD rows;
+  legal, publication, keys, secrets, root rights, security rules, money and irreversible actions still asked) applies here
+  too; CLAUDE.md's "Decisions" line is unchanged until the owner amends it.
 - 2026-10-27, branch `claude/software-update-step1` (Software Update step 1b, the infrastructure of grassfield ADR-0033,
   whose client is grassfield PR #16): PR to main; nothing published, no secret, no tag, no release.
   - `keyring/`: grassfield-keyring, files in `/usr/share/grassfield/pacman-keyring/`, populate-from only with keys and only
@@ -23,14 +39,19 @@ Last updated: 2026-10-27
       0 failures; a ref without release notes is refused.
   - The first clean builds found two gaps in grassfield's PKGBUILD makedepends, fixed in grassfield #16 (8509be8, 0338116).
 
+## Tests run
+- Store step 0: none (docs only). Software Update step 1b: see its entry above (end-to-end 72 PASS, the CI path).
+
 ## Open
 - From the owner, later: `GRASSFIELD_DEPLOY_KEY`, then `GRASSFIELD_TAG_POLL=on`; the `release` environment and its
   secrets (signing key and passphrase, S3 keys) and variables (bucket, endpoint); the public key and fingerprint; the host.
 - The workflows have never run on GitHub (they need the deploy key); their steps ran locally only through the scripts.
 - Pruning of old snapshots (7 days) and of packages no snapshot names: with hosting, after M5.
-- PR #1 (the Store catalog) edits README, CLAUDE.md and this file too: whichever merges second merges the other.
 
 ## Next
-- The integrator's review (opus for signing, keyring and CI) of this PR. grassfield #16 (the client) is merged.
-- After this PR: grassfield's one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21).
-- Step 2 (the pane) in grassfield after its Settings PRs #8-#10.
+- Software Update step 1b (ADR-0033): the integrator's review of PR #3 (opus for signing, keyring and CI); then grassfield's
+  one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21); step 2 (the pane) in grassfield after
+  its Settings PRs #8-#10.
+- Grassfield Store step 1 (ADR-0037): `catalog/` sources, the build and validation tool (standard-library Python), a CI job
+  producing the signed catalog with a throwaway key; the catalog joins `publish.yml`, the one serialized publisher per
+  channel written (disabled) by step 1b.
