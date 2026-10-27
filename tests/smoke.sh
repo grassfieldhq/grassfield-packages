@@ -54,6 +54,6 @@ if [[ -z $(sed -n 's/^GRASSFIELD_SIGNING_FINGERPRINT=//p' /usr/share/grassfield/
 fi
 pacman -Rns --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >>"$log" 2>&1
 expect "pacman -Rns: no [grassfield] line, no /etc/pacman.d/grassfield.conf, pacman works" \
-  test "$(grep -c grassfield /etc/pacman.conf):$(ls /etc/pacman.d/grassfield.conf 2>/dev/null | wc -l):$(pacman -Qq pacman)" == "0:0:pacman"
+  test "$(grep -c '^\[grassfield\]' /etc/pacman.conf):$(ls /etc/pacman.d/grassfield.conf 2>/dev/null | wc -l):$(pacman -Qq pacman)" == "0:0:pacman"
 echo "smoke: $fails failure(s)"
 ((fails == 0))
