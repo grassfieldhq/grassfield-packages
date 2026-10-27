@@ -95,8 +95,10 @@ jobs:
 
   release:
     # DISABLED: the owner removes `if: false` once the environments exist (tags only: startsWith(inputs.ref, 'v')).
-    # It holds no build: it receives the tested artifact. The key enters only the container that signs, which runs the
-    # image's gpg and repo-add and installs nothing (review M1).
+    # It holds no build: it receives the tested artifact. Three containers, so that the key never meets anything that
+    # reads package contents (review M1: repo-add evaluates .PKGINFO lines): prepare (no key: published packages,
+    # keyring/ compared, repo-add), sign (the key, gpg only, on an allowlist of names, no network), check (no key: as a
+    # client checks it, the folder's exact contents, the keyring byte for byte keyring/'s). Only then is it uploaded.
     if: false
     needs: test
     strategy:
@@ -105,8 +107,8 @@ jobs:
         channel: [stable, beta]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # The publisher's environments (publish.yml): protected, the owner approves each run; each
-    # holds that channel's key and storage credentials. None exists today.
+    # The publisher's environments (publish.yml): protected, the owner approves each run; each holds that channel's key
+    # and storage credentials. None exists today.
     environment: publish-${{ matrix.channel }}
     env:
       CHANNEL: ${{ matrix.channel }}
@@ -121,51 +123,64 @@ jobs:
         with:
           name: grassfield-channel-${{ github.run_id }}
           path: out
-      - name: This channel's release build, and none stored yet (each tag is built once; a stored one is never replaced)
+      - name: This channel's release build, none stored yet (each tag is built once), and the published packages of its names
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
+          # Exact keys (review minor 1): 0 present, 1 absent (404), any other answer stops the job.
+          exists() {
+            local err
+            if err=$(aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$1" 2>&1 >/dev/null); then return 0; fi
+            if grep -qE '\(404\)|Not Found' <<<"$err"; then return 1; fi
+            echo "::error::$1: $err"; exit 1
+          }
           rel=$(ls -d out/tree/releases/"$CHANNEL"/*/ 2>/dev/null | head -n 1) || true
           [ -n "$rel" ] || { echo "this tag does not go to $CHANNEL"; exit 0; }
           rel=${rel%/} v=$(basename "$rel")
-          if aws --endpoint-url "$ENDPOINT" s3 ls "s3://$BUCKET/releases/$CHANNEL/$v/grassfield.db" >/dev/null 2>&1 ||
-             aws --endpoint-url "$ENDPOINT" s3 ls "s3://$BUCKET/withdrawn/$CHANNEL/$v/grassfield.db" >/dev/null 2>&1; then
-            echo "release build $CHANNEL/$v is stored already: never replaced"; exit 0
-          fi
+          for k in "releases/$CHANNEL/$v/grassfield.db" "withdrawn/$CHANNEL/$v/grassfield.db"; do
+            if exists "$k"; then echo "$k is stored already: a release build is never replaced"; exit 0; fi
+          done
           echo "REL=$rel" >>"$GITHUB_ENV"
           # A package file name never changes content: one already published is used as it is (grassfield-keyring).
           mkdir published
           for f in "$rel"/*.pkg.tar.zst; do
             b=$(basename "$f")
-            aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/$b" published/ 2>/dev/null &&
-              aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/$b.sig" published/ || rm -f "published/$b"
+            if exists "$CHANNEL/x86_64/$b"; then
+              aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/$b" published/
+              aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/$b.sig" published/
+            fi
           done
-      - name: Signed with the project's key (only this container sees it)
+      - name: Prepared without the key (the published packages, keyring/ compared, repo-add)
+        if: env.REL != ''
+        run: |
+          docker run --rm --network none -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release" \
+            -v "$PWD/published:/published:ro" "$IMAGE" \
+            /packages/scripts/sign-release.sh prepare --release /release --keyring /packages/keyring --published /published
+      - name: Signed with the project's key (only this container sees it; gpg only, on an allowlist of names)
         if: env.REL != ''
         env:
           GRASSFIELD_SIGNING_KEY: ${{ secrets.GRASSFIELD_SIGNING_KEY }}
           GRASSFIELD_SIGNING_PASSPHRASE: ${{ secrets.GRASSFIELD_SIGNING_PASSPHRASE }}
         run: |
           docker run --rm --network none -e GRASSFIELD_SIGNING_KEY -e GRASSFIELD_SIGNING_PASSPHRASE \
-            -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release" -v "$PWD/published:/published:ro" "$IMAGE" \
-            bash -euo pipefail -c '
+            -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release" "$IMAGE" bash -euo pipefail -c '
               export GNUPGHOME=$(mktemp -d)
               printf "%s" "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
                 --import <(printf "%s\n" "$GRASSFIELD_SIGNING_KEY")
               key=$(gpg --with-colons --list-secret-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
-              /packages/scripts/sign-release.sh --release /release --gnupghome "$GNUPGHOME" --key "$key" --published /published'
+              /packages/scripts/sign-release.sh sign --release /release --gnupghome "$GNUPGHOME" --key "$key"'
       # Until grassfield-keyring holds the project's key (O11), this refuses every release build: nothing can be signed
       # for clients before the keyring that trusts the key.
-      - name: Checked as a client checks it, the key trusted by the grassfield-keyring it ships (no key here)
+      - name: Checked as a client checks it, without the key (signatures, exact contents, keyring/ byte for byte)
         if: env.REL != ''
         run: |
           docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/$REL:/release:ro" "$IMAGE" bash -euo pipefail -c '
             install -m644 /packages/build/pacman.conf /etc/pacman.conf
             { pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm --needed python; } >/dev/null
             mkdir -p "/tmp/t/releases/$0" && cp -r /release "/tmp/t/releases/$0/$(basename "$1")"
-            /packages/scripts/check-tree.sh --tree /tmp/t --trusted' "$CHANNEL" "$REL"
+            /packages/scripts/check-tree.sh --tree /tmp/t --trusted --keyring-src /packages/keyring' "$CHANNEL" "$REL"
       - name: Kept beside the channels, never under a pointer, its database last (the publisher reads a complete one)
         if: env.REL != ''
         env:
