@@ -558,6 +558,46 @@ class Recipes(unittest.TestCase):
         # A plain variable as pacman's argument could hold -y: a note.
         self.assertTrue(any("from a variable ($pkg)" in n for n in finds('pacman -S --noconfirm "$pkg"')[4]))
 
+    def test_what_pr_6s_merge_left(self):
+        # The two gaps of PR #6's merge comment.
+        rp = catalog.recipe_problems
+        repo = {"game", "a"}
+        # 1. A file run by a relative or foreign path, or found through a PATH that names a folder the pins do not cover.
+        for code, found in (('cd "$OMARCHY_PATH/install" && ./hidden.sh', "runs a file outside the pinned files (./hidden.sh)"),
+                            ("/tmp/x.sh", "runs a file outside the pinned files (/tmp/x.sh)"),
+                            ('PATH="$OMARCHY_PATH/install:$PATH" hidden.sh',
+                             "PATH set to a folder outside the pinned files ($OMARCHY_PATH/install)"),
+                            ('env PATH="$OMARCHY_PATH/install:$PATH" hidden.sh',
+                             "PATH set to a folder outside the pinned files ($OMARCHY_PATH/install)"),
+                            ("export PATH=/tmp/bin:$PATH\nhidden.sh", "PATH set to a folder outside the pinned files (/tmp/bin)"),
+                            ("PATH+=:\nhidden.sh", "PATH set to a folder outside the pinned files (the current folder)")):
+            with self.subTest(code):
+                self.script("omarchy-install-hidden", code)
+                self.assertIn(found, "\n".join(rp(self.omarchy, "omarchy-install-hidden", [], repo)))
+        # Omarchy's own PATH lines (v4.0.4) and a system program by its path: judged as before.
+        self.script("omarchy-install-path", 'export PATH="$OMARCHY_PATH/bin:/usr/local/bin:/usr/bin:$PATH"\n'
+                                            "export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin\n"
+                                            "omarchy-pkg-add a")
+        self.assertEqual(rp(self.omarchy, "omarchy-install-path", [], repo), [])
+        self.script("omarchy-install-abs", "/usr/bin/pacman -Sy game")
+        self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-abs", [], repo)[0])
+
+        # 2. A variable or a substitution the scan cannot resolve, handed to a command it does not know: a note.
+        def notes(code):
+            return catalog.command_findings(code, repo)[4]
+        for code, arg in (("pm=$(command -v pacman); firejail $pm -Sy", "firejail is handed $pm"),
+                          ('firejail --quiet "$pm"', "firejail is handed $pm"),
+                          ("gum spin --title t $pm -Sy", "gum is handed $pm"),
+                          ("firejail $(command -v pacman) -Sy", "firejail is handed $(...)")):
+            with self.subTest(code):
+                self.assertTrue(any(arg in n for n in notes(code)), notes(code))
+        self.assertTrue(any("gum is handed pacman" in p for p in catalog.command_findings("gum spin --title t pacman -Sy")[3]))
+        # Not noted: the file's own functions and Omarchy's commands (read where they are written), names as data.
+        for code in ('f() { echo; }\nf "$x"', 'function g { echo; }\ng "$x"', 'omarchy-notification-send "$x"',
+                     'kill "$pid"', 'jq -r "$q"'):
+            with self.subTest(code):
+                self.assertFalse(any("is handed" in n for n in notes(code)), notes(code))
+
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)
         self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
