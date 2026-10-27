@@ -2,14 +2,17 @@
 """The one publisher of a channel (grassfield ADR-0033 h.2 as amended by ADR-0037 g). Written and disabled: CI never runs it
 until the owner decides, after the M5 legal review (CLAUDE.md). Standard library, plus pacman's `vercmp` and `bsdtar`.
 
-  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR [--catalog DIR] [--keep-days 7]
+  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR [--catalog DIR --keyring-dir DIR]
+             [--keep-days 7]
 
 One run publishes the latest state, never what started it (GitHub cancels a waiting run when a newer one queues, and each
 tag is built once): the newest release built and signed for the channel (--releases holds one folder per version, as each
 tag's build left it) and the catalog built from main's head (--catalog). It
   1. reads the pointer and the current snapshot's manifest;
-  2. builds the new snapshot from it: the newest release when it is newer than the snapshot's, the catalog when its serial
-     is higher, the rest kept; nothing new, nothing written;
+  2. builds the new snapshot from it: the newest release when it is newer than the snapshot's, the catalog when its content
+     differs (serial and build time aside) and its serial is higher, the rest kept; nothing new, nothing written. The
+     catalog must first pass the Store's own checks for this channel (tools/catalog.py verify: a trusted signature, the
+     rules, the icons); only the icons it lists are uploaded;
   3. refuses to go backwards: a grassfield.db naming an older version of a package than the current one, an older release
      or a lower serial are never published (a rollback is a new release, ADR-0033 h.2);
   4. uploads the files with immutable names (packages, icons) once, then the snapshot, then writes the pointer only if it
@@ -32,10 +35,12 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import catalog as catalogtool  # noqa: E402  the Store's own checks of a catalog (tools/catalog.py verify)
+
 SNAPSHOT_FILES = ("grassfield.db", "grassfield.files", "grassfield-notes.json")
 CATALOG_FILE = "grassfield-catalog.v1.json"
 PACKAGE_FILE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]*\.pkg\.tar\.(zst|xz|gz)(\.sig)?$")
-ICON_FILE = re.compile(r"^[0-9a-f]{64}\.png$")
 VERSION_DIR = re.compile(r"^[A-Za-z0-9._+:~-]{1,64}$")
 ATTEMPTS = 5
 
@@ -76,6 +81,7 @@ class LocalStore:
     """A directory laid out as the bucket: <channel>/<arch>/{<package files>, catalog/<sha256>.png, snap/<id>/, pointer}."""
 
     def __init__(self, root, channel, arch):
+        self.channel = channel
         self.base = os.path.join(root, channel, arch)
         os.makedirs(os.path.join(self.base, "snap"), exist_ok=True)
 
@@ -164,16 +170,28 @@ def newest_release(releases):
     return best
 
 
-def catalog_serial(folder):
+def checked_catalog(folder, keyring_dir, channel):
+    """(serial, content hash, icon file names) of a catalog that passes the Store's own checks for this channel: its
+    signature by a trusted key, its rules, its icons. The content hash leaves out the serial and the build time, so a
+    catalog rebuilt with nothing changed is nothing new."""
+    p = catalogtool.Problems()
+    catalogtool.verify(folder, keyring_dir, channel, 0, p)
+    if p:
+        raise Refused(f"the catalog does not pass the Store's checks for {channel}: {'; '.join(p.items[:3])}")
     with open(os.path.join(folder, CATALOG_FILE), "rb") as f:
-        return json.loads(f.read())["serial"]
+        obj = json.loads(f.read())
+    icons = sorted({a["icon"]["sha256"] + ".png" for a in obj["apps"] if isinstance(a.get("icon"), dict)})
+    content = {k: v for k, v in obj.items() if k not in ("serial", "generated")}
+    digest = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    return obj["serial"], digest, icons
 
 
-def plan(store, current, releases, catalog):
+def plan(store, current, releases, catalog, keyring_dir=None):
     """What the new snapshot holds, from the current one: (files {name: path}, packages, icons, manifest) or None."""
     old = store.manifest(current) if current else {"release": None, "catalogSerial": None, "files": {}}
     files = {name: store.snapshot_path(current, name) for name in old["files"]}
-    manifest = {"version": 1, "release": old["release"], "catalogSerial": old["catalogSerial"], "previous": current}
+    manifest = {"version": 1, "release": old["release"], "catalogSerial": old["catalogSerial"],
+                "catalogContent": old.get("catalogContent"), "previous": current}
     packages, icons, changed = [], [], []
 
     version, folder = newest_release(releases)
@@ -196,18 +214,18 @@ def plan(store, current, releases, catalog):
             print(f"publish: the newest build ({version}) is older than the published release ({old['release']}): kept")
 
     if catalog:
-        serial = catalog_serial(catalog)
+        serial, content, names = checked_catalog(catalog, keyring_dir, store.channel)
         was = old["catalogSerial"]
-        if was is None or serial > was:
+        if content == old.get("catalogContent"):
+            pass  # the same catalog, rebuilt: nothing new
+        elif was is None or serial > was:
             files[CATALOG_FILE] = os.path.join(catalog, CATALOG_FILE)
             files[CATALOG_FILE + ".sig"] = os.path.join(catalog, CATALOG_FILE + ".sig")
-            icon_dir = os.path.join(catalog, "catalog")
-            icons = [(f, os.path.join(icon_dir, f)) for f in sorted(os.listdir(icon_dir)) if ICON_FILE.match(f)] \
-                if os.path.isdir(icon_dir) else []
-            manifest["catalogSerial"] = serial
+            icons = [(f, os.path.join(catalog, "catalog", f)) for f in names]  # only what the signed file lists
+            manifest["catalogSerial"], manifest["catalogContent"] = serial, content
             changed.append(f"catalog {serial}")
-        elif serial < was:
-            print(f"publish: catalog serial {serial} is lower than the published {was}: kept")
+        else:
+            print(f"publish: a catalog with serial {serial}, not above the published {was}: kept")
 
     if not changed:
         return None
@@ -219,12 +237,12 @@ def plan(store, current, releases, catalog):
     return files, packages, icons, manifest, changed
 
 
-def publish(store, releases, catalog, now=None):
+def publish(store, releases, catalog, now=None, keyring_dir=None):
     """One run. Returns the new snapshot id, or None when nothing was new."""
     with store.run_lock():
         for _ in range(ATTEMPTS):
             current, tag = store.read_pointer()
-            planned = plan(store, current, releases, catalog)
+            planned = plan(store, current, releases, catalog, keyring_dir)
             if planned is None:
                 print(f"publish: nothing new (snapshot {current})")
                 return None
@@ -265,15 +283,20 @@ def main(argv):
     ap.add_argument("--arch", default="x86_64", choices=("x86_64",))
     ap.add_argument("--releases", help="one folder per built version: grassfield.db, .files, the notes, packages, .sig")
     ap.add_argument("--catalog", help="the catalog built from main's head and signed for this channel")
+    ap.add_argument("--keyring-dir", help="the keyring folder the Store verifies with (grassfield.gpg, grassfield-trusted, "
+                                          "grassfield-revoked): required with --catalog")
     ap.add_argument("--keep-days", type=int, default=7)
     args = ap.parse_args(argv)
     for tool in ("vercmp", "bsdtar"):
         if shutil.which(tool) is None:
             print(f"publish: {tool} is missing (pacman, libarchive)", file=sys.stderr)
             return 2
+    if args.catalog and not args.keyring_dir:
+        print("publish: --catalog needs --keyring-dir (the catalog is checked as the Store checks it)", file=sys.stderr)
+        return 2
     store = LocalStore(args.store, args.channel, args.arch)
     try:
-        publish(store, args.releases, args.catalog)
+        publish(store, args.releases, args.catalog, keyring_dir=args.keyring_dir)
     except Refused as e:
         print(f"publish: refused: {e}", file=sys.stderr)
         return 1
