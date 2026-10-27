@@ -5,7 +5,7 @@ Last updated: 2026-10-27
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
 - 2026-10-27 (cloud session, branch claude/pensive-thompson-fhk5um, owner brief "Grassfield Store", step 0, docs only): the
   repository's second role, the Store catalog Grassfield edits, added to README.md and CLAUDE.md. Its contract is grassfield
-  ADR-0037 (Proposed, in the step-0 PR of grassfield): `grassfield-catalog.v1.json` + `.sig` + `catalog/<sha256>.png` in each
+  ADR-0037 (Proposed, grassfieldhq/grassfield PR #15; this repository's PR #1): `grassfield-catalog.v1.json` + `.sig` + `catalog/<sha256>.png` in each
   channel's snapshot beside the repository, signed with the repository's key, verified by the Store like the release notes
   (ADR-0033 d.8). No code here before the opus PASS of ADR-0037.
 
