@@ -24,15 +24,22 @@ Last updated: 2026-10-27
   - `keyring/`: grassfield-keyring, files in `/usr/share/grassfield/pacman-keyring/`, populate-from only with keys and only
     while `/etc/pacman.d/grassfield.conf` exists, `pre_remove` deletes its trusted keys; NO KEY until O11 (empty files).
   - `build/pacman.conf`: Omarchy's stable mirror (Hyprland 0.56.2-4, quickshell 0.3.2-1, Qt 6.11.2, KF6 6.31 in [extra]).
-  - `scripts/build-channel.sh` (grassfield's own PKGBUILD, keyring built first, names and replaces checked, packages,
-    databases and notes signed, `repo-add --prevent-downgrade`, immutable package names, snapshot + pointer, build record),
-    `notes.py`, `check-tree.sh`, `rollback.sh`, `view.sh`, `serve.py`.
-  - `.github/workflows/`: build (workflow_dispatch: build with a throwaway key, check-tree, artifact; test: smoke.sh),
-    publish (the one serialized publisher per channel of ADR-0033 h.2 as amended by ADR-0037 g, merged from PR #1 while
-    PR #3 was open: the latest state, built from the current snapshot with `build-channel.sh --channel`, the pointer
-    written with If-Match, started again when it moved; `if: false`), poll (every 15 min, off until
-    `GRASSFIELD_TAG_POLL=on`), watch-hyprland (by hand only). Not run: no deploy key exists, and nothing may be published.
-    `tests/newest-release.sh` (the publisher's choice of release, in a container): 9 PASS.
+  - `scripts/build-channel.sh` (grassfield's own PKGBUILD, keyring built first and once per version, names and replaces
+    checked, packages, databases and notes signed, the release build, immutable package names, never a package older than
+    the current snapshot's, snapshot + pointer, build record), `notes.py`, `check-tree.sh`, `sign-release.sh`,
+    `rollback.sh`, `view.sh`, `serve.py`.
+  - `.github/workflows/`: build (workflow_dispatch: build with a throwaway key, check-tree, artifact; test: smoke.sh;
+    release, `if: false`: a tag's tested release builds signed with the project's key by `scripts/sign-release.sh` and
+    kept beside the channels for the publisher), poll (every 15 min, off until `GRASSFIELD_TAG_POLL=on`), watch-hyprland
+    (by hand only). Not run: no deploy key exists, and nothing may be published.
+  - Publication: the one serialized publisher per channel is Grassfield Store step 1's (ADR-0037 g and its Consequences;
+    PR #2's `publish.yml` and `tools/publish.py`). This PR's own `publish.yml` (written while resolving the conflict with
+    PR #1) rebuilt each tag at publication, against ADR-0037 g ("each tag is built once", its packages, databases and notes
+    kept where the publisher reads them), and doubled PR #2's: removed, with `newest-release.sh`, its test and
+    `--channel`. Instead `build-channel.sh` writes each release build `releases/<channel>/<version>/` (a database of the
+    release alone, notes with the channel's earlier releases from the tag's own tags, grassfield-keyring built once per
+    version), the layout `tools/publish.py --releases` reads, and makes the test tree's snapshots from it as the
+    publisher does.
   - Tests (outputs in `docs/evidence/step1b-2026-10-27/`):
     - `tests/e2e.sh` with the REAL packages built three times (1.0.0, 1.0.1, 1.1.0-beta1 of grassfield's step 1 client):
       exit 0, 72 PASS, 0 FAIL (first installation per ADR-0033 b.3a, Set Up through real pkexec, updates seen with
@@ -55,6 +62,6 @@ Last updated: 2026-10-27
 - Software Update step 1b (ADR-0033): the integrator's review of PR #3 (opus for signing, keyring and CI); then grassfield's
   one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21); step 2 (the pane) in grassfield after
   its Settings PRs #8-#10.
-- Grassfield Store step 1 (ADR-0037): `catalog/` sources, the build and validation tool (standard-library Python), a CI job
-  producing the signed catalog with a throwaway key; the catalog joins `publish.yml`, the one serialized publisher per
-  channel written (disabled) by step 1b.
+- Grassfield Store step 1 (ADR-0037, PR #2): the catalog and the one serialized publisher per channel (`publish.yml`,
+  `tools/publish.py`), which reads PR #3's release builds; whichever merges second aligns the two (its pointer is JSON,
+  this repository's test tools read a bare id).
