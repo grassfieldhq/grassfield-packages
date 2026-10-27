@@ -40,12 +40,39 @@ Last updated: 2026-10-27
     an artifact 7 days; the publish job `if: false`, no secret. Actions pinned by commit.
   - Carried into step 3 (integrator, PASS of step 0): SD2's sheet keeps "Action: <id>" and the helper's path under the
     plain words; the helper's `install` applies SD1's app-entry rule too, or the gap is accepted in writing.
+- 2026-10-27, after the opus review of step 1 (FAIL, 1 MAJOR and 10 minors, PR #2):
+  - MAJOR: every language of a web app's `name` follows the web-app name rule (1 to 64 characters, no `/`, no leading `.`,
+    no control or format character), tested through `validate_catalog`.
+  - Plain text refuses format characters (zero-width, BOM, soft hyphen), U+2028/2029 and markup (`<`, `>`, `&entity;`);
+    URLs are parsed (a valid lower-case host, no user information, a valid port); keyring lists are read whatever their
+    case and spacing; malformed types are problems, never crashes, and the command line ends in one line, exit 2.
+  - Recipes: any `-y` cluster or `--refresh`/`--sysupgrade` on pacman, yay or paru, a `yay` without an operation, `git
+    clone`, `makepkg`, `yay -G`/`-B`, and an AUR build (`omarchy-pkg-aur-add` or `yay -S` of a name no repository serves, or
+    known only at run time). The 63 recipes of the pinned release: still the 4 the ADR names refused.
+  - Publisher: the catalog must pass the Store's own checks for the channel first (`--keyring-dir`; signature, rules,
+    icons); the decision is on a content hash (serial and build time aside) recorded as `catalogContent`, so a rebuilt
+    catalog is nothing new; only the icons the signed file lists are uploaded.
+  - `.github/workflows/publish.yml`: the publishing job in its own workflow (push to main only, `if: false`, a failing first
+    step, a protected `publish-<channel>` environment per ADR-0033 b.7, one concurrency group per channel, never cancelled
+    in progress, main's head checked out when the run starts, no secret); `catalog.yml` has the check job only.
+  - Tests: truncated catalog and `.sig`, empty and missing `.sig`, a signer absent from the keyring, an oversize file.
+  - Category names made neutral (minor 10): "Graphics" / « Graphisme », "Photos and Video" / « Photos et vidéo », "Music and
+    Audio" / « Musique et audio », "Development" / « Développement ».
 
 ## Tests run
+- Step 1 review fixes: `tests/run-in-container.sh --network host` (throwaway archlinux:base container): `Ran 40 tests … OK`,
+  exit 0, nothing skipped (the signature and publisher tests make throwaway ed25519 keys there). Outside a container:
+  `Ran 40 tests … OK (skipped=21)`. `python3 -I tools/catalog.py validate`: ok.
 - Step 1: `tests/run-in-container.sh` (throwaway archlinux:base container): 28 tests OK (the signature tests make throwaway
   ed25519 keys there). The CI check job replayed step by step in a throwaway container: docker exit 0 (validate ok,
   15792 packages, 41 entries and 1604 AppStream components gathered, check-env ok, both channels built, signed, verified).
 - Step 0: none (docs only).
+
+## Open questions (owner)
+- **Legal (ask the owner; never settled by an agent):** may the Store's category names follow the Mac App Store's own list
+  ("Graphics & Design", "Photo & Video", "Developer Tools"), or stay neutral? The catalog uses neutral names until the owner
+  decides; "Productivity", "Games", "Education" and "Utilities" are common to most stores but are in that list too. The
+  section and category names and the publishers' icons need the M5 legal review before any publication (ST10).
 
 ## Next
 - The integrator's review of the step-1 PR (opus for the signature, the verification and CI).

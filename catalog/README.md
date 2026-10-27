@@ -35,7 +35,10 @@ until the owner decides (CLAUDE.md).
 - Lengths in characters: section and category titles 40, eyebrows 40, titles and names 80, texts and summaries 200,
   descriptions 4000. Line breaks only in texts, summaries and descriptions.
 - Never Apple's names ("App Store", "Arcade"), editorial texts or assets. The section and category names, and the
-  publishers' icons, need legal review before any publication (ADR-0037 e.10, owner decision ST10).
+  publishers' icons, need legal review before any publication (ADR-0037 e.10, owner decision ST10). Category names are
+  neutral words that keep macOS's structure ("Graphics", "Photos and Video", "Development"), never the Mac App Store's own
+  list ("Graphics & Design", "Photo & Video", "Developer Tools"); whether a closer name may be used is the owner's legal
+  question (docs/STATE.md).
 
 ## Checks
 ```sh
