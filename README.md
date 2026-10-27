@@ -14,8 +14,13 @@ catalog of Grassfield Store.
   - building the packages from a Grassfield tag in a clean environment, signing, the `grassfield-keyring` package,
     `repo-add`, CI and, later, hosting;
   - the **Store catalog** Grassfield edits: the Discover selection, the sections, the categories, our short texts in English
-    and French, and the icons of apps that ship no metadata. CI validates it, signs it with the repository's key and puts it
-    in each channel's snapshot beside the repository, so it changes without a new Grassfield release.
+    and French, and the icons of apps that ship no metadata (their publishers' icons, with licence and origin recorded; needs
+    legal review before any publication). CI validates it and signs it with the repository's key. It changes without a new
+    Grassfield release.
+- **One publisher per channel.** Package releases and catalog updates share each channel's snapshot pointer, so they go
+  through one serialized publishing job per channel: it builds the new snapshot from the current one, never puts an older
+  package database back, and writes the pointer only if it has not moved since it read it (ADR-0037 g, ADR-0033 h.2 as
+  amended). A catalog update can never move the package database back.
 
 ## Status
 Nothing is published. The repository stays private until the owner decides, after the legal review of milestone M5.

@@ -8,6 +8,10 @@ Last updated: 2026-10-27
   ADR-0037 (Proposed, grassfieldhq/grassfield PR #15; this repository's PR #1): `grassfield-catalog.v1.json` + `.sig` + `catalog/<sha256>.png` in each
   channel's snapshot beside the repository, signed with the repository's key, verified by the Store like the release notes
   (ADR-0033 d.8). No code here before the opus PASS of ADR-0037.
+- 2026-10-27, after the first opus review (FAIL, 3 MAJOR, in grassfield PR #15): the publication of both repositories' files
+  is one serialized publisher per channel, building from the current snapshot, never backwards, with a conditional pointer
+  write (MAJOR 3; ADR-0033 h.2 amended in grassfield PR #15); publishers' icons for apps without metadata (owner, ST10) with
+  their licence and origin, needs legal review; CI refuses recipes that sync. README and CLAUDE.md updated.
 
 ## Tests run
 - None (docs only).
@@ -19,4 +23,4 @@ Last updated: 2026-10-27
   grassfield ADR-0009), signing, `grassfield-keyring`, `repo-add` per channel, CI producing the channel repository as an
   artifact. No publication.
 - Then (ADR-0037 step 1): `catalog/` sources, the build and validation tool (standard-library Python), a CI job producing the
-  signed catalog with a throwaway key, publication disabled.
+  signed catalog with a throwaway key, the serialized publisher written and disabled.
