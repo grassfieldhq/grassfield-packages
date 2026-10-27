@@ -321,7 +321,8 @@ class Publisher(unittest.TestCase):
         first, _ = self.run_once()
         self.release("1.0.1-1")
         second, _ = self.run_once(now=1793095300)
-        for target, why in ((second, "not an older snapshot"), ("20991231T000000Z-000000000000", "no snapshot"),):
+        for target, why in ((second, "not an older snapshot"), ("20991231T000000Z-000000000000", "no snapshot"),
+                            ("../../../etc", "not a snapshot id"), (first + "/..", "not a snapshot id")):
             with self.subTest(why), self.assertRaises(publish.Refused) as e:
                 publish.rollback(self.store, target, now=1793095400, keyring_dir=self.keyring)
             self.assertIn(why, str(e.exception))

@@ -47,6 +47,7 @@ CATALOG_FILE = "grassfield-catalog.v1.json"
 PACKAGE_FILE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]*\.pkg\.tar\.(zst|xz|gz)(\.sig)?$")
 VERSION_DIR = re.compile(r"^[A-Za-z0-9._+:~-]{1,64}$")
 ATTEMPTS = 5
+SNAPSHOT_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
 
 
 class Refused(Exception):
@@ -296,6 +297,8 @@ def rollback(store, target, now=None, keyring_dir=None):
     (scripts/rollback.sh). As a publication does, it checks the signatures of the databases and notes it reads or
     publishes against keyring_dir before bsdtar reads a database (a snapshot signed by a key revoked since is refused).
     Returns the new snapshot id."""
+    if not isinstance(target, str) or not SNAPSHOT_ID.match(target):
+        raise Refused(f"{target!r} is not a snapshot id")
     with store.run_lock():
         for _ in range(ATTEMPTS):
             current, tag = store.read_pointer()
