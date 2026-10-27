@@ -72,23 +72,3 @@ jobs:
           name: catalog-signed-with-a-throwaway-key
           path: /tmp/artifact
           retention-days: 7
-
-  publish:
-    # Disabled: nothing is published until the owner decides, after the M5 legal review (CLAUDE.md, ADR-0033 h). Once
-    # enabled, with the host chosen (ADR-0033 O8) and the owner's key and storage credentials as secrets: one run at a time
-    # per channel, never cancelled half way, and each run publishes the latest state (tools/publish.py): the newest release
-    # built for the channel and this catalog, built from the current snapshot, with a conditional pointer write.
-    if: false
-    needs: check
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        channel: [stable, beta]
-    concurrency:
-      group: publish-${{ matrix.channel }}
-      cancel-in-progress: false
-    steps:
-      - name: Disabled
-        run: |
-          echo "Publishing is disabled until the owner decides (CLAUDE.md); the bucket's backend waits for the host." >&2
-          exit 1
