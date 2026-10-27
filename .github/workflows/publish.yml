@@ -1,0 +1,127 @@
+# The one serialized publisher per channel (grassfield ADR-0033 h.2 as amended by ADR-0037 g). DISABLED: nothing is
+# published until the owner decides, after the M5 legal review (owner decision 2026-10-27); the owner removes the job's
+# `if: false` once the secrets and variables below exist. Never on a pull request.
+#
+# Per channel, one run at a time, never cancelled half way (a newer run waiting cancels an older waiting one, which loses
+# nothing): a run takes nothing from its trigger and publishes the latest state.
+#   1. It reads the channel's pointer with its version tag (ETag) and downloads the current snapshot.
+#   2. The newest release built for the channel: the tags whose "build <tag>" run succeeded (build.yml), the newest by
+#      vercmp among those that go to the channel, if newer than the snapshot's grassfield-desktop (newest-release.sh).
+#      Nothing newer: the run writes nothing. (Grassfield Store's step 1 adds the catalog of `main`'s head here, ADR-0037 g.)
+#   3. It builds that release again with the project's key on top of the current snapshot (build-channel.sh --channel: the
+#      database never goes back for any package), checks the tree, uploads the packages, then the snapshot.
+#   4. It writes the pointer only if it still has the version tag read in 1 (a conditional write, If-Match); when the pointer
+#      moved, it starts again (a new run) and this one fails. A conditional write on the chosen storage is NOT VERIFIED (the
+#      host is not chosen, O8).
+#
+# Secrets and variables the owner provides later (none exists; the agent creates none), in the protected environment
+# `release` (the owner approves each run): GRASSFIELD_SIGNING_KEY (armored secret key) and GRASSFIELD_SIGNING_PASSPHRASE
+# (O6); GRASSFIELD_S3_ACCESS_KEY_ID and GRASSFIELD_S3_SECRET_ACCESS_KEY (write access to the bucket only, O8); variables
+# GRASSFIELD_S3_BUCKET and GRASSFIELD_S3_ENDPOINT; and the repository secret GRASSFIELD_DEPLOY_KEY.
+name: publish
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+env:
+  IMAGE: archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
+jobs:
+  publish:
+    if: false
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, beta]
+    concurrency:
+      group: publish-${{ matrix.channel }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: release
+    env:
+      CHANNEL: ${{ matrix.channel }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+      BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
+      ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: packages
+      - name: The pointer, its version tag and the current snapshot
+        run: |
+          set -euo pipefail
+          d=tree/$CHANNEL/x86_64
+          mkdir -p "$d"
+          if etag=$(aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$CHANNEL/x86_64/pointer" \
+              --query ETag --output text 2>/dev/null); then
+            aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$CHANNEL/x86_64/pointer" "$d/pointer"
+            id=$(cat "$d/pointer")
+            aws --endpoint-url "$ENDPOINT" s3 cp --recursive "s3://$BUCKET/$CHANNEL/x86_64/snap/$id/" "$d/snap/$id/"
+          else
+            etag=none   # the channel's first publication
+          fi
+          echo "POINTER_ETAG=$etag" >>"$GITHUB_ENV"
+      - name: The newest release built for the channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh run list --workflow build.yml --status success --limit 1000 --json displayTitle -q '.[].displayTitle' |
+            sed -n 's/^build //p' >tags.txt
+          docker run --rm -v "$PWD:/w" -w /w "$IMAGE" bash -euo pipefail -c '
+            d=tree/$0/x86_64
+            current=""
+            [ -f "$d/pointer" ] && current=$(bsdtar -xOf "$d/snap/$(cat "$d/pointer")/grassfield.db" | awk "/^%NAME%\$/ { getline n } /^%VERSION%\$/ { getline v; if (n == \"grassfield-desktop\") { print v; exit } }")
+            packages/scripts/newest-release.sh "$0" "$current" <tags.txt >release.txt' "$CHANNEL"
+          release=$(cat release.txt)
+          echo "RELEASE=$release" >>"$GITHUB_ENV"
+          [ -n "$release" ] && echo "publishing $release to $CHANNEL" || echo "$CHANNEL: nothing newer than its snapshot; nothing written"
+      - uses: actions/checkout@v4
+        if: env.RELEASE != ''
+        with:
+          repository: grassfieldhq/grassfield
+          ssh-key: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+          ref: ${{ env.RELEASE }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: grassfield
+      - name: Build it again with the project's key, on top of the current snapshot
+        if: env.RELEASE != ''
+        env:
+          GRASSFIELD_SIGNING_KEY: ${{ secrets.GRASSFIELD_SIGNING_KEY }}
+          GRASSFIELD_SIGNING_PASSPHRASE: ${{ secrets.GRASSFIELD_SIGNING_PASSPHRASE }}
+        run: |
+          docker run --rm -e RELEASE -e CHANNEL -e GRASSFIELD_SIGNING_KEY -e GRASSFIELD_SIGNING_PASSPHRASE \
+            -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/tree:/tree" "$IMAGE" bash -euo pipefail -c '
+              export GNUPGHOME=$(mktemp -d)
+              printf "%s" "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+                --import <(printf "%s\n" "$GRASSFIELD_SIGNING_KEY")
+              key=$(gpg --with-colons --list-secret-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
+              /packages/scripts/build-channel.sh --source /grassfield --ref "$RELEASE" --tree /tree --channel "$CHANNEL" \
+                --gnupghome "$GNUPGHOME" --key "$key"
+              gpg --export "$key" >/tree/project-key.gpg
+              /packages/scripts/check-tree.sh --tree /tree --keyring /tree/project-key.gpg'
+      - name: Upload the packages, then the snapshot, then the pointer only if it has not moved
+        if: env.RELEASE != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          d=tree/$CHANNEL/x86_64
+          aws --endpoint-url "$ENDPOINT" s3 sync --size-only --exclude '*' --include '*.pkg.tar.zst' --include '*.pkg.tar.zst.sig' \
+            "$d/" "s3://$BUCKET/$CHANNEL/x86_64/"
+          aws --endpoint-url "$ENDPOINT" s3 sync "$d/snap/" "s3://$BUCKET/$CHANNEL/x86_64/snap/"
+          if [ "$POINTER_ETAG" = none ]; then cond=(--if-none-match '*'); else cond=(--if-match "$POINTER_ETAG"); fi
+          if ! aws --endpoint-url "$ENDPOINT" s3api put-object --bucket "$BUCKET" --key "$CHANNEL/x86_64/pointer" \
+              --body "$d/pointer" --cache-control no-store "${cond[@]}"; then
+            echo "::error::the $CHANNEL pointer moved since it was read: starting again"
+            gh workflow run publish.yml
+            exit 1
+          fi

@@ -1,15 +1,12 @@
 # Build one Grassfield tag (or commit) into the [grassfield] channel tree, as a CI artifact (grassfield ADR-0033 e-h).
-# NOTHING IS PUBLISHED: the publish job below is written and disabled until the owner decides, after the M5 legal review
-# (owner decision 2026-10-27). The build signs with a throwaway key made in the job (ADR-0033 b.7), so the artifact is for
-# review and tests only, never for clients; it carries the keyless grassfield-keyring (U23) until the owner's key exists.
+# NOTHING IS PUBLISHED: this workflow builds and tests only. Publication is publish.yml, the one serialized publisher per
+# channel, written and disabled until the owner decides, after the M5 legal review (owner decision 2026-10-27). The build
+# signs with a throwaway key made in the job (ADR-0033 b.7), so the artifact is for review and tests only, never for
+# clients; it carries the keyless grassfield-keyring (U23) until the owner's key exists. A successful run of "build <tag>"
+# is what publish.yml calls a release built for its channel.
 #
-# Secrets and variables the owner provides later (none exists; the agent creates none):
-#   secret GRASSFIELD_DEPLOY_KEY               read-only deploy key of grassfieldhq/grassfield (O13); without it the build
-#                                              stops at its first step
-#   environment `release` (protected: the owner approves each run), for the publish job only, never on pull requests:
-#     secrets GRASSFIELD_SIGNING_KEY (armored secret key) and GRASSFIELD_SIGNING_PASSPHRASE (O6),
-#     GRASSFIELD_S3_ACCESS_KEY_ID and GRASSFIELD_S3_SECRET_ACCESS_KEY (write access to the bucket only, O8);
-#     variables GRASSFIELD_S3_BUCKET and GRASSFIELD_S3_ENDPOINT
+# Secret the owner provides later (none exists; the agent creates none): GRASSFIELD_DEPLOY_KEY, a read-only deploy key of
+# grassfieldhq/grassfield (O13); without it the build stops at its first step. publish.yml lists the others.
 name: build
 run-name: build ${{ inputs.ref }}
 on:
@@ -84,74 +81,3 @@ jobs:
         run: |
           docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/out:/out:ro" "$IMAGE" \
             bash /packages/tests/smoke.sh --tree /out/tree --keyring /out/build-signing-key.gpg
-
-  publish:
-    needs: [build, test]
-    # DISABLED: nothing is published until the owner decides, after the M5 legal review. To enable it, the owner removes
-    # this line once the secrets and variables above exist; never on a pull request.
-    if: false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 150
-    environment: release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: packages
-      - uses: actions/checkout@v4
-        with:
-          repository: grassfieldhq/grassfield
-          ssh-key: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: grassfield
-      - name: The published state of both channels (their pointers and current snapshots)
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
-          BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
-          ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          for c in stable beta; do
-            d=tree/$c/x86_64
-            mkdir -p "$d"
-            aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$c/x86_64/pointer" "$d/pointer" || continue
-            id=$(cat "$d/pointer")
-            aws --endpoint-url "$ENDPOINT" s3 cp --recursive "s3://$BUCKET/$c/x86_64/snap/$id/" "$d/snap/$id/"
-          done
-      - name: Build again with the project's key, on top of the published state
-        env:
-          REF: ${{ inputs.ref }}
-          GRASSFIELD_SIGNING_KEY: ${{ secrets.GRASSFIELD_SIGNING_KEY }}
-          GRASSFIELD_SIGNING_PASSPHRASE: ${{ secrets.GRASSFIELD_SIGNING_PASSPHRASE }}
-        run: |
-          docker run --rm -e REF -e GRASSFIELD_SIGNING_KEY -e GRASSFIELD_SIGNING_PASSPHRASE \
-            -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/tree:/tree" "$IMAGE" bash -euo pipefail -c '
-              export GNUPGHOME=$(mktemp -d)
-              printf "%s" "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
-                --import <(printf "%s\n" "$GRASSFIELD_SIGNING_KEY")
-              key=$(gpg --with-colons --list-secret-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
-              /packages/scripts/build-channel.sh --source /grassfield --ref "$REF" --tree /tree --gnupghome "$GNUPGHOME" --key "$key"
-              gpg --export "$key" >/tree/project-key.gpg
-              /packages/scripts/check-tree.sh --tree /tree --keyring /tree/project-key.gpg'
-      - name: Upload in order (ADR-0033 h.2) - packages, then the snapshots, then each pointer, once
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
-          BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
-          ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          for c in stable beta; do
-            d=tree/$c/x86_64
-            [ -f "$d/pointer" ] || continue
-            aws --endpoint-url "$ENDPOINT" s3 sync --size-only --exclude '*' --include '*.pkg.tar.zst' --include '*.pkg.tar.zst.sig' \
-              "$d/" "s3://$BUCKET/$c/x86_64/"
-            aws --endpoint-url "$ENDPOINT" s3 sync "$d/snap/" "s3://$BUCKET/$c/x86_64/snap/"
-          done
-          for c in stable beta; do
-            d=tree/$c/x86_64
-            [ -f "$d/pointer" ] || continue
-            aws --endpoint-url "$ENDPOINT" s3 cp --cache-control no-store "$d/pointer" "s3://$BUCKET/$c/x86_64/pointer"
-          done
