@@ -1,0 +1,22 @@
+$ docker run ... -e BEFORE=4b7aa31 -e AFTER=448a381 -v <git archive of db904b8>:/packages:ro -v <grassfield clone>:/grassfield:ro -v <out>:/out archlinux:base@<pinned> bash /packages/docs/evidence/o22-2026-10-27/guard.sh
+
+== BEFORE (4b7aa31): grassfield-desktop without the dependency
+PASS: its PKGBUILD: no grassfield-keyring in grassfield-desktop's depends
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-11-10
+PASS: build-channel.sh refuses it after makepkg -> exit 1 (1053 s): build-channel.sh: grassfield-desktop-1.0.0rc1-3-x86_64.pkg.tar.zst: grassfield-desktop does not depend on grassfield-keyring (grassfield ADR-0033 O22): a ref from before that change
+PASS: ... and writes no release build
+
+== AFTER (448a381): grassfield-desktop depends on grassfield-keyring
+PASS: its PKGBUILD: grassfield-keyring in grassfield-desktop's depends
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-11-10
+PASS: build-channel.sh builds it -> exit 0 (996 s)
+PASS: check-tree.sh --keyring -> exit 0, 2 sets with the dependency (check-tree: 0 failure(s))
+
+done: 6 checks, 0 failure(s)
+exit 0

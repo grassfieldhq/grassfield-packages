@@ -203,11 +203,30 @@ Last updated: 2026-10-27
      prefix (`"$d/pacman"`) is refused like a literal one.
   The scan on v4.0.4 (c668141): the six setups pass; 19 notes (the 10 before, and 9 new: `sed`, `ffmpeg`, `yt-dlp`,
   `quickshell` and `qs` handed a variable in the browser, monitor and shell helpers).
+- 2026-10-27, branch `claude/grassfield-software-update-dj2bvt` (the follow-up of grassfield PR #24, grassfield ADR-0033 O22:
+  grassfield-desktop depends on grassfield-keyring; integrator review of grassfield #24's 532fb8f):
+  - `scripts/build-channel.sh` refuses a release whose grassfield-desktop `.PKGINFO` lacks `depend = grassfield-keyring`
+    (a grassfield ref from before #24), and `scripts/check-tree.sh` refuses a set whose database's grassfield-desktop does
+    not depend on it (the CI build check and the release job's third container);
+  - `keyring/grassfield-keyring.install`: `pre_remove` reads a last line without its newline too (`|| [ -n "$fpr" ]`), or,
+    after O11, that key would stay trusted after removal; grassfield-keyring 20261027-2 (pkgrel 2: a changed install
+    script); `build-channel.sh` reuses a built keyring only while it is still `keyring/`'s, the whole package
+    (`keyring-check.sh`, no longer the three files only), so such a change without a new pkgrel stops the build;
+  - `tests/e2e.sh` and `tests/smoke.sh`: the client names grassfield-desktop, -compositor and -icons only, and gets
+    grassfield-keyring "Installed as a dependency for another package"; `tests/release-build.sh` reads the keyring's
+    version from `keyring/PKGBUILD`, its fake grassfield-desktop depends on the keyring, and it checks the refusal and the
+    install script's last line.
+  - Evidence: `docs/evidence/o22-2026-10-27/`.
 - Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
 
 ## Tests run
+- O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
+  OK; release-build.sh 36/0; install-repro (main deletes one of two keys, this branch both); guard.sh 6/0 (4b7aa31
+  refused after makepkg, 448a381 built, the dependency in both sets); smoke.sh 6/0 (the keyring installed as a
+  dependency); e2e.sh 44/0; gitleaks clean. On the merge of main 4a49c07 (003c0f5): unit tests 55 OK, release-build.sh
+  36/0.
 - PR #6's follow-up: `tests/run-in-container.sh --network host`: `Ran 55 tests … OK`, exit 0. The CI check job replayed in
   a throwaway container: docker exit 0 (`validate: ok`; 15832 packages, 51 entries, 1604 AppStream components; `check-env:
   ok`; both channels verified; no temporary GnuPG home left). `pin` on v4.0.4 in a copy of `catalog/`: `nothing changed`,
@@ -255,8 +274,8 @@ Last updated: 2026-10-27
   missing environment unprotected when a job that names it runs, so this comes before `if: false` is removed.
 
 ## Next
-- Software Update step 1b (ADR-0033): the integrator's re-review of PR #3 (the counter-review's fixes, the unification and
-  the merge of #4); then grassfield's one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21);
-  step 2 (the pane) in grassfield after its Settings PRs #8-#10.
+- Software Update: grassfield PR #24 (grassfield-keyring in grassfield-desktop's depends, owner decision O22) and this
+  repository's follow-up PR (branch claude/grassfield-software-update-dj2bvt), then step 2 (the pane) in grassfield when
+  the integrator posts it.
 - Store step 2: the integrator's review of this branch's PR (with grassfield's step 2 PR).
 - The Store's later steps add to the catalog (icons for apps without metadata after the legal review).

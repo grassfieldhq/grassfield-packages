@@ -14,8 +14,9 @@ post_upgrade() {
 
 pre_remove() {
 	# The trust this package gave leaves with it: a locally signed key is trusted for every repository, so each key of its
-	# trusted list is deleted from pacman's keyring. An empty list (no key yet) deletes nothing.
-	while IFS=: read -r fpr _; do
+	# trusted list is deleted from pacman's keyring. An empty list (no key yet) deletes nothing. A last line without its
+	# newline is read too (read fails on it but fills fpr), or that key would stay trusted.
+	while IFS=: read -r fpr _ || [ -n "$fpr" ]; do
 		case $fpr in '' | *[!0-9A-Fa-f]*) continue ;; esac
 		usr/bin/pacman-key --list-keys "$fpr" >/dev/null 2>&1 || continue
 		usr/bin/pacman-key --delete "$fpr" >/dev/null || echo "grassfield-keyring: the key $fpr could not be deleted from pacman's keyring"

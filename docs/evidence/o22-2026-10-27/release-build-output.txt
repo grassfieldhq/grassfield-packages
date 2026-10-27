@@ -1,0 +1,86 @@
+$ tests/release-build.sh (on a git archive of f678b7d; GRASSFIELD_TEST_CA set)
+== notes.py: the channel's earlier releases from the tags
+PASS: stable 1.0.1-3: itself and 1.0.0, not the rc, the beta or later tags (1.0.1-3 1.0.0-3 2026-10-27 1.0.0 : ce qui a changé.)
+PASS: ... an earlier release keeps its date and its French text
+PASS: beta 1.1.0beta1-3: every earlier release, newest first, 1.0.2 without notes left out (1.1.0beta1-3 1.0.1-3 1.0.1rc1-3 1.0.0-3 2026-10-27 1.0.0 : ce qui a changé.)
+PASS: a pkgrel rebuild 1.0.1-4: its 'Rebuilt for' note, then 1.0.1-3's own (1.0.1-4 1.0.1-3 1.0.0-3 2026-10-27 1.0.0 : ce qui a changé.)
+PASS: a tag whose pkgrel cannot be read is an error, not a silent gap
+== sign-release.sh and check-tree.sh on a release build
+PASS: sign-release.sh prepare (no key: published packages, keyring/ compared, repo-add) -> exit 0
+PASS: ... grassfield-keyring is the published file, with its signature
+PASS: ... the signatures sign must make removed, the published one kept
+PASS: sign-release.sh sign (gpg only) -> exit 0, 4 files signed (the desktop package, the database, its files, the notes)
+PASS: no symbolic link in the tree
+PASS: release build stable/1.0.1-3: grassfield.db signed
+PASS: release build stable/1.0.1-3: grassfield.files signed
+PASS: release build stable/1.0.1-3: grassfield-notes.json signed
+PASS: release build stable/1.0.1-3: grassfield-desktop-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.1-3: every package is named grassfield-*
+PASS: release build stable/1.0.1-3: no package declares replaces=
+PASS: release build stable/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.1-3: notes valid, newest release 1.0.1-3
+check-tree: 0 failure(s)
+PASS: ... the release build passes check-tree.sh with K2 alone (every signature, the database's SHA-256)
+PASS: no symbolic link in the tree
+PASS: release build stable/1.0.1-3: its grassfield-keyring is /w/kr-k2's, the whole package
+PASS: release build stable/1.0.1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.1-3: grassfield.db signed
+PASS: release build stable/1.0.1-3: grassfield.files signed
+PASS: release build stable/1.0.1-3: grassfield-notes.json signed
+PASS: release build stable/1.0.1-3: grassfield-desktop-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.1-3: every package is named grassfield-*
+PASS: release build stable/1.0.1-3: no package declares replaces=
+PASS: release build stable/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.1-3: notes valid, newest release 1.0.1-3
+check-tree: 0 failure(s)
+PASS: ... and check-tree.sh --trusted --keyring-src: K2 trusted by the keyring it ships, that keyring keyring/'s, nothing else in the folder
+== tools/publish.py publishes the signed release build
+PASS: tools/publish.py --releases -> exit 0 (publish: snapshot 20261027T164532Z-f7b3d3151002 (release 1.0.1-3), was None)
+PASS: its pointer {"snapshot": "20261027T164532Z-f7b3d3151002"} and manifest (release 1.0.1-3, 6 files)
+PASS: no symbolic link in the tree
+PASS: stable 20261027T164532Z-f7b3d3151002: manifest.json names every file with its SHA-256
+PASS: stable 20261027T164532Z-f7b3d3151002: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: stable 20261027T164532Z-f7b3d3151002: grassfield.db signed
+PASS: stable 20261027T164532Z-f7b3d3151002: grassfield.files signed
+PASS: stable 20261027T164532Z-f7b3d3151002: grassfield-notes.json signed
+PASS: stable 20261027T164532Z-f7b3d3151002: grassfield-desktop-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T164532Z-f7b3d3151002: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T164532Z-f7b3d3151002: every package is named grassfield-*
+PASS: stable 20261027T164532Z-f7b3d3151002: no package declares replaces=
+PASS: stable 20261027T164532Z-f7b3d3151002: grassfield-desktop depends on grassfield-keyring
+PASS: stable 20261027T164532Z-f7b3d3151002: notes valid, newest release 1.0.1-3
+check-tree: 0 failure(s)
+PASS: check-tree.sh --trusted on the published channel (manifest, signatures, SHA-256)
+PASS: a snapshot file that is not the one its manifest records -> exit 1 (FAIL: stable 20261027T164532Z-f7b3d3151002: manifest.json does not match the snapshot)
+== check-tree.sh --trusted refuses a key its grassfield-keyring does not trust
+PASS: signed by K2, its keyring trusts K1 only -> exit 1 (FAIL: release build beta/1.0.1-3: grassfield.db or its signature missing, invalid or not by a trusted key)
+PASS: signed by K2, trusted but also revoked -> exit 1
+PASS: signed by K2, trusted -> exit 0
+PASS: signed by K2, trusted, but its grassfield-desktop does not depend on grassfield-keyring (O22) -> exit 1 (FAIL: release build beta/1.0.1-3: grassfield-desktop does not depend on grassfield-keyring (grassfield ADR-0033 O22))
+== keyring/grassfield-keyring.install: pre_remove deletes every key of its trusted list
+PASS: pre_remove -> exit 0, both keys deleted, the last line without its newline too (2 deletes)
+PASS: prepare: a published package not signed by a key keyring/ trusts -> exit 1 (sign-release.sh: the published grassfield-keyring-20261027-2-any.pkg.tar.zst is not signed by a key keyring/ trusts)
+== review minor 2: the keyring a release ships is keyring/'s, byte for byte
+PASS: keyring-check.sh: the release's keyring is keyring/'s, the whole package -> exit 0
+PASS: keyring-check.sh refuses a keyring package with another install -> exit 1 (keyring-check.sh: grassfield-keyring-20261027-2-any.pkg.tar.zst: .INSTALL is not keyring/grassfield-keyring.install)
+PASS: keyring-check.sh refuses a keyring package with another field -> exit 1 (keyring-check.sh: grassfield-keyring-20261027-2-any.pkg.tar.zst: .PKGINFO holds more than makepkg's descriptive fields: provides = pacman-keyring)
+PASS: keyring-check.sh refuses a keyring package with another path -> exit 1 (keyring-check.sh: grassfield-keyring-20261027-2-any.pkg.tar.zst: not keyring/'s paths:  etc/ etc/pacman.d/ etc/pacman.d/hook )
+PASS: keyring-check.sh refuses a keyring package with another link -> exit 1 (keyring-check.sh: grassfield-keyring-20261027-2-any.pkg.tar.zst: a link among its entries: lrwxrwxrwx  0 root   root        0 Oct 27 16:45 usr/share/grassfield/pacman-keyring/grassfield-revoked -> /tmp/attacker-controlled)
+PASS: prepare: the release's grassfield-keyring is not keyring/'s -> exit 1 (sign-release.sh: grassfield-keyring-20261027-2-any.pkg.tar.zst is not keyring/'s)
+PASS: check-tree.sh --keyring-src: a keyring that is not keyring/'s -> exit 1 (FAIL: release build stable/1.0.1-3: its grassfield-keyring is not /w/kr-more's: refused (keyring-check.sh: grassfield-keyring-20261027-2-any.pkg.tar.zst: grassfield.gpg is not keyring/grassfield.gpg))
+== the allowlist: nothing but a release build's names is signed or uploaded
+PASS: check-tree.sh: a file the release build does not name -> exit 1 (FAIL: release build stable/1.0.1-3: other files than its packages, the three files and their .sig: extra.txt )
+PASS: sign: a name a release build does not hold -> exit 1, nothing signed (sign-release.sh: extra.txt is not a name a release build holds)
+== review M1: a crafted .PKGINFO runs code in repo-add, never where the key is
+PASS: the crafted package runs code in repo-add: where the key is, it leaks (the design before this fix)
+PASS: prepare refuses to run where the key is (exit 1)
+PASS: prepare, without the key: the payload ran there (exit 0), and the environment it saw holds no key
+PASS: sign, where the key is: refuses the file the payload dropped, exit 1 (sign-release.sh: leaked-env is not a name a release build holds), the key in none of its output
+PASS: ... and the key in no file of the release folder
+PASS: a package whose bytes are not the ones its database records -> check-tree.sh exit 1 (FAIL: release build stable/1.0.1-3: grassfield-desktop-1.0.1-3-any.pkg.tar.zst missing, its signature missing, invalid or untrusted, or not the SHA-256 the database records)
+done: 36 checks, 0 failure(s)
+exit 0
