@@ -8,8 +8,10 @@
 #   --published DIR  the channel's package files already published: a package file name never changes content, so one
 #                    found there is used as it is, with its signature (grassfield-keyring, which every release names)
 # The packages keep the bytes the test job installed; each gets a signature by --key, the database is made again by
-# repo-add (it records each package's signature), and grassfield.db, grassfield.files and grassfield-notes.json are signed
-# by --key. A passphrase, when the key has one, comes from GRASSFIELD_SIGNING_PASSPHRASE. Runs only as root inside a
+# repo-add (a published package may replace a built one; without --include-sigs it records no signature, pacman fetches
+# each .sig beside its package), and grassfield.db, grassfield.files and grassfield-notes.json are signed by --key. A
+# passphrase, when the key has one, comes from GRASSFIELD_SIGNING_PASSPHRASE. It runs no build code and installs nothing
+# (gpg, repo-add and bsdtar of the image), so the key never meets a build (review M1). Runs only as root inside a
 # throwaway container (repo-add). Exit 0 signed, 1 failed, 2 usage.
 set -euo pipefail
 release="" gnupghome="" key="" published=""
