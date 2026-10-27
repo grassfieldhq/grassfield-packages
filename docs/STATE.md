@@ -64,7 +64,8 @@ Last updated: 2026-10-27
     - Minors: actions pinned and credentials per step; stronger assertions, and a skip in CI fails; `--to` validated;
       the evidence re-recorded with its commits.
   - Tests on 3a6a138, grassfield main ae121e8 (outputs and commands in `docs/evidence/step1b-2026-10-27/`):
-    - `tests/e2e.sh` with the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): in progress at this commit, recorded with the next.
+    - `tests/e2e.sh` with the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): exit 0, 43
+      checks (330 PASS lines with check-tree's), 0 FAIL.
       It covers:
       - the first installation per ADR-0033 b.3a, and Set Up through real pkexec;
       - updates seen with verified notes and installed, and the pkgrel rebuild's note;

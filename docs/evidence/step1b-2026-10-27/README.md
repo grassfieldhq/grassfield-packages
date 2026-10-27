@@ -13,7 +13,7 @@ local commits in scratch clones, never pushed:
 
 | File | Command | Result |
 |---|---|---|
-| `e2e-output.txt` | `tests/e2e.sh --grassfield <clone of grassfield> --ref <ae121e8>` | PENDING: the run on 3a6a138 is in progress at this commit; this file still holds the earlier run (3efd2ca's tests, 72 PASS) and is replaced when it ends |
+| `e2e-output.txt` | `tests/e2e.sh --grassfield <clone of grassfield> --ref <ae121e8>` | exit 0, "done: 0 failure(s)": 43 checks (330 PASS lines with check-tree's own), 0 FAIL; 1.0.0 built in 1542 s, hyprland 0.56.2-4 |
 | `release-build-output.txt` | `tests/release-build.sh` | exit 0, 0 FAIL: 17 checks (58 PASS lines with check-tree's own) |
 | `ci-build-rc1.txt`, `ci-build-rc2.txt` | `build.yml`'s build job: its inline script, verbatim, in a fresh tree, for v1.0.0-rc1 and v1.0.0-rc2 (rc2 built again at another time than rc1, so that its grassfield-keyring has other bytes) | exit 0 each, check-tree 0 failures (22 PASS each) |
 | `ci-smoke-rc1.txt`, `ci-smoke-rc2.txt` | `build.yml`'s test job: `tests/smoke.sh` on each artifact | exit 0 each, 0 failures: 6 checks each (28 PASS lines with check-tree's own) |
