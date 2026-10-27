@@ -12,15 +12,17 @@
 # pushed) make the releases v1.0.0, v1.0.1 and v1.1.0-beta1, each with its release notes and a repository.conf that pins K
 # on a file:// base; scripts/build-channel.sh builds each tag with grassfield's own PKGBUILD on Omarchy stable's package
 # set into its release builds (the notes of each with the channel's earlier releases, grassfield-keyring built once) and
-# the channels made from them, and scripts/view.sh serves the tree as the edge rule would. The same container is then the
-# user's machine:
+# the channels the one publisher (tools/publish.py) makes from them, and scripts/view.sh serves the tree as the edge rule
+# would. The same container is then the user's machine:
 #   - the first installation of ADR-0033 b.3a (K added and locally signed, the section by hand, pacman -S from the
 #     repository), then `grassfield-channel-set stable` through real polkitd and pkexec;
 #   - 1.0.1 published: the client sees it with its notes, pacman -Syu installs it;
 #   - a database signed by the rogue key and packages signed by it are refused; notes signed by it are not shown;
+#   - 1.0.1 rebuilt with pkgrel + 1 for its Hyprland (ADR-0033 f, O7): its note seen, installed;
 #   - beta: 1.1.0beta1 seen and installed; back to stable: no downgrade;
-#   - A7i over HTTP (scripts/serve.py): a pointer moved back fails for a client already on the newer snapshot; a new
-#     snapshot with the older packages (scripts/rollback.sh) works and downgrades nothing;
+#   - A7i over HTTP (scripts/serve.py): a pointer moved back fails for a client already on the newer snapshot; the
+#     deliberate rollback (scripts/rollback.sh: the newer release builds withdrawn, then tools/publish.py --rollback-to,
+#     a new snapshot) works and downgrades nothing;
 #   - the tree passes check-tree.sh; `pacman -Rns` takes the section and the key away; the real keyless keyring trusts
 #     nothing.
 set -uo pipefail
@@ -215,7 +217,7 @@ expect "the checker: up-to-date" test "$(check state)" == up-to-date
 R2=$((REL + 1))
 say "ADR-0033 f, O7: 1.0.1 rebuilt for its Hyprland with pkgrel $R2 (build-channel.sh --pkgrel, no new tag)"
 build "$C2" --pkgrel "$R2"; rc=$?
-expect "build-channel.sh $C2 --pkgrel $R2 -> exit 0 ($(grep -E '^stable: snapshot' "$W/build-$C2-pkgrel$R2.log"))" test "$rc" == 0 ||
+expect "build-channel.sh $C2 --pkgrel $R2 -> exit 0 ($(grep -E '^stable: publish: snapshot' "$W/build-$C2-pkgrel$R2.log"))" test "$rc" == 0 ||
   tail -n 40 "$W/build-$C2-pkgrel$R2.log"
 hypr=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}')
 expect "its notes: 'Rebuilt for Hyprland ${hypr%-*}' first, then 1.0.1-$REL and 1.0.0-$REL from the tags" \
@@ -260,7 +262,7 @@ printf '{"snapshot": "%s"}\n' "$older" >"$W/tree/stable/x86_64/pointer"
 pacman -Sy >"$W/back.log" 2>&1; rc=$?
 expect "the pointer moved back to the older snapshot: pacman -Sy fails for this client ($(grep -m1 '^error:' "$W/back.log"))" test "$rc" == 1
 cp "$W/pointer.newer" "$W/tree/stable/x86_64/pointer"
-rb() { "$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --gnupghome /root/keys/k --key "$K" --to "$@"; }
+rb() { "$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --to "$@"; }   # no key: the older files keep their signatures
 out=$(rb "$newer" 2>&1); rc=$?
 expect "rollback.sh --to the current snapshot -> refused, exit 1 ($out)" test "$rc" == 1
 out=$(rb 20991231T000000Z-000000000000 2>&1); rc=$?

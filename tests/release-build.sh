@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The release build's pieces with small fake packages (grassfield ADR-0033 b.7, g; ADR-0037 g): notes.py's earlier
-# releases from the tags, sign-release.sh, snapshot.py (the publisher's format: the manifest, the catalog kept, the pointer
-# written only if it has not moved) and check-tree.sh (--keyring, and --trusted as a client checks it). The real packages
-# are build-channel.sh's, tested by e2e.sh. Runs itself in a throwaway archlinux:base container (git, vercmp, repo-add,
+# releases from the tags, sign-release.sh, tools/publish.py on a signed release build (its own tests are
+# tests/test_publish.py) and check-tree.sh (--keyring, and --trusted as a client checks it). The real packages are
+# build-channel.sh's, tested by e2e.sh. Runs itself in a throwaway archlinux:base container (git, vercmp, repo-add,
 # throwaway keys made there and gone with it). Exit 0 all PASS (or SKIP without docker, outside CI), 1 a FAIL.
 set -u
 IMAGE=archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
@@ -92,34 +92,17 @@ expect "... the release build passes check-tree.sh with K2 alone (every signatur
 expect "... and check-tree.sh --trusted: K2 is in the trusted list of the grassfield-keyring the release ships" \
   /p/scripts/check-tree.sh --tree /w/tree --trusted
 
-echo "== snapshot.py: the publisher's format"
-d=/w/tree/stable/x86_64 && mkdir -p "$d"
-cp "$r"/*.pkg.tar.zst "$r"/*.pkg.tar.zst.sig "$d/"
-id1=$(python3 -I /p/scripts/snapshot.py write "$d" --release 1.0.1-3 --source "$r" --expect "")
-expect "the first snapshot: pointer {\"snapshot\": \"$id1\"}, manifest.json" \
-  test "$(cat "$d/pointer"):$(python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); print(m["release"], m["previous"], len(m["files"]))' "$d/snap/$id1/manifest.json")" == \
-    "{\"snapshot\": \"$id1\"}:1.0.1-3 None 6"
-# The Store's publisher adds a catalog to the current snapshot (simulated: its files and its manifest entry).
-printf '{"version":1}\n' >"$d/snap/$id1/grassfield-catalog.v1.json" && sig k2 "$d/snap/$id1/grassfield-catalog.v1.json"
-python3 -I - "$d/snap/$id1" <<'PY'
-import hashlib, json, os, sys
-m = json.load(open(os.path.join(sys.argv[1], "manifest.json")))
-for n in ("grassfield-catalog.v1.json", "grassfield-catalog.v1.json.sig"):
-    m["files"][n] = hashlib.sha256(open(os.path.join(sys.argv[1], n), "rb").read()).hexdigest()
-open(os.path.join(sys.argv[1], "manifest.json"), "w").write(json.dumps(m, sort_keys=True, separators=(",", ":")) + "\n")
-PY
-python3 -I /p/scripts/snapshot.py write "$d" --release 1.0.1-3 --source "$r" --expect 20991231T000000Z-000000000000 >/dev/null 2>/tmp/err; rc=$?
-expect "a pointer that moved since it was read -> nothing written, exit 1 ($(cat /tmp/err))" test "$rc:$(python3 -I /p/scripts/snapshot.py current "$d")" == "1:$id1"
-sleep 1
-id2=$(python3 -I /p/scripts/snapshot.py write "$d" --release 1.0.1-3 --source "$r" --expect "$id1")
-expect "the next snapshot keeps the current one's catalog and names its predecessor" \
-  test "$(ls "$d/snap/$id2" | grep -c catalog):$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["previous"])' "$d/snap/$id2/manifest.json")" == "2:$id1"
-expect "check-tree.sh --trusted on the channel and the release build (manifest, signatures, SHA-256)" \
-  /p/scripts/check-tree.sh --tree /w/tree --trusted
-echo tampered >>"$d/snap/$id2/grassfield-catalog.v1.json"
-/p/scripts/check-tree.sh --tree /w/tree --trusted >/tmp/check.log 2>&1; rc=$?
+echo "== tools/publish.py publishes the signed release build"
+store=/w/store
+out=$(python3 -I /p/tools/publish.py --store "$store" --channel stable --releases /w/tree/releases/stable 2>&1); rc=$?
+expect "tools/publish.py --releases -> exit 0 ($out)" test "$rc" == 0
+id=$(python3 -I /p/scripts/snapshot.py current "$store/stable/x86_64")
+expect "its pointer {\"snapshot\": \"$id\"} and manifest (release 1.0.1-3, 6 files)" \
+  test "$(python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); print(m["release"], len(m["files"]))' "$store/stable/x86_64/snap/$id/manifest.json")" == "1.0.1-3 6"
+expect "check-tree.sh --trusted on the published channel (manifest, signatures, SHA-256)" /p/scripts/check-tree.sh --tree "$store" --trusted
+echo tampered >>"$store/stable/x86_64/snap/$id/grassfield-notes.json"
+/p/scripts/check-tree.sh --tree "$store" --trusted >/tmp/check.log 2>&1; rc=$?
 expect "a snapshot file that is not the one its manifest records -> exit 1 ($(grep -m1 FAIL /tmp/check.log))" test "$rc" == 1
-rm -rf "$d"
 
 echo "== check-tree.sh --trusted refuses a key its grassfield-keyring does not trust"
 trusted_case() { # trusted-list revoked-list -> check-tree --trusted's exit code on a release build signed by K2

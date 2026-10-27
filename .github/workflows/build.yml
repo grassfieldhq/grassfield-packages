@@ -3,8 +3,8 @@
 # key made in the job (ADR-0033 b.7), so the artifact is for review and tests only, never for clients; it carries the
 # keyless grassfield-keyring (U23) until the owner's key exists. The release job, written and disabled until the owner
 # decides after the M5 legal review (owner decision 2026-10-27), signs a tag's tested release builds with the project's key
-# and keeps them where the channel's one serialized publisher reads them (ADR-0037 g; that publisher is Grassfield Store's
-# step 1, and starts when this workflow completes).
+# and keeps them where the channel's one serialized publisher reads them (ADR-0037 g; publish.yml, which starts when this
+# workflow completes).
 #
 # From the owner, later (none exists; the agent creates none): the secret GRASSFIELD_DEPLOY_KEY, a read-only deploy key of
 # grassfieldhq/grassfield (O13), without which the build stops at its first step; for the release job, the publisher's
@@ -105,7 +105,7 @@ jobs:
         channel: [stable, beta]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # The publisher's environments (Grassfield Store step 1's publish.yml): protected, the owner approves each run; each
+    # The publisher's environments (publish.yml): protected, the owner approves each run; each
     # holds that channel's key and storage credentials. None exists today.
     environment: publish-${{ matrix.channel }}
     env:
