@@ -192,6 +192,10 @@ Last updated: 2026-10-27
   a plain message.
 
 ## Tests run
+- O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
+  OK; release-build.sh 36/0; install-repro (main deletes one of two keys, this branch both); guard.sh 6/0 (4b7aa31
+  refused after makepkg, 448a381 built, the dependency in both sets); smoke.sh 6/0 (the keyring installed as a
+  dependency); e2e.sh 44/0; gitleaks clean.
 - Software Update step 1b: see its entry above (unit tests, release-build, the end-to-end, the CI path with keyring/ as
   after O11, GitHub's `check` job).
 - Store step 1 follow-up: `tests/run-in-container.sh --network host`: `Ran 46 tests … OK`, exit 0, nothing skipped (47 with

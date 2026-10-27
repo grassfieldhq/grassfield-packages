@@ -1,0 +1,8 @@
+$ gitleaks v8.18.4 detect --source . --no-banner --redact --log-opts origin/main..HEAD
+5:50PM INF scan completed in 30.3ms
+5:50PM INF no leaks found
+-> exit 0
+$ gitleaks v8.18.4 detect --source . --no-banner --redact --no-git
+5:50PM INF scan completed in 84.5ms
+5:50PM INF no leaks found
+-> exit 0
