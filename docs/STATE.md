@@ -225,7 +225,8 @@ Last updated: 2026-10-27
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
   OK; release-build.sh 36/0; install-repro (main deletes one of two keys, this branch both); guard.sh 6/0 (4b7aa31
   refused after makepkg, 448a381 built, the dependency in both sets); smoke.sh 6/0 (the keyring installed as a
-  dependency); e2e.sh 44/0; gitleaks clean.
+  dependency); e2e.sh 44/0; gitleaks clean. On the merge of main 4a49c07 (003c0f5): unit tests 55 OK, release-build.sh
+  36/0.
 - PR #6's follow-up: `tests/run-in-container.sh --network host`: `Ran 55 tests … OK`, exit 0. The CI check job replayed in
   a throwaway container: docker exit 0 (`validate: ok`; 15832 packages, 51 entries, 1604 AppStream components; `check-env:
   ok`; both channels verified; no temporary GnuPG home left). `pin` on v4.0.4 in a copy of `catalog/`: `nothing changed`,

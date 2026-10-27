@@ -21,4 +21,8 @@ throwaway one, made inside the container of its run and gone with it. Each test 
 | `e2e-output.txt` | `tests/e2e.sh --grassfield <clone> --ref 448a381` | exit 0, "done: 44 checks, 0 failure(s)": four real builds; the client names the three packages and gets the keyring as a dependency; the keyring reused once through `keyring-check.sh`; `pacman -Rn` takes the section and the key away; this repository's keyless keyring trusts nothing |
 | `gitleaks-output.txt` | gitleaks v8.18.4 on `origin/main..HEAD` and on the tree | exit 0 and exit 0, "no leaks found" |
 
+After the merge of main 4a49c07 (Store PRs #6 and #7, catalog only) in 003c0f5: `tests/run-in-container.sh` exit 0,
+`Ran 55 tests … OK` (main's new catalog tests), nothing skipped; `tests/release-build.sh` exit 0, "done: 36 checks, 0
+failure(s)". The scripts and tests the long runs used are unchanged by that merge.
+
 Not run: the workflows on GitHub (no deploy key exists, nothing may be published).
