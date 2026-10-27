@@ -36,6 +36,7 @@ Last updated: 2026-10-27
     - `check-tree.sh`: `--trusted` checks signatures as a client does; `--keyring-src` checks the keyring byte for
       byte; manifests; a release build holding nothing else;
     - `sign-release.sh`: `prepare` without the key, `sign` with gpg only;
+    - `keyring-check.sh`: grassfield-keyring against `keyring/`, the whole package;
     - `rollback.sh`: the newer release builds withdrawn, then `tools/publish.py --rollback-to`;
     - `snapshot.py`: reads the pointer;
     - `view.sh`, `serve.py`.
@@ -67,7 +68,20 @@ Last updated: 2026-10-27
       - the keyring compared with `keyring/`;
       - checks counted by the tests themselves.
     - The unification after PR #2's merge (comment 6440650953): 6b6a755..d7a6d2e.
-  - Tests: the runs on 6d96057 and 08a6677 are in progress at this commit; recorded with the next one.
+    - PR #4's merge (b4032fb, the publisher checks every signature before use): 9520c98, 9a87253.
+    - Counter-review of 9a87253: no BLOCKER or MAJOR in the code; FAIL because nothing at the head was run and recorded.
+      Minors 1-3 fixed in d844f07..7744988:
+      - the publisher checks the rollback's snapshot id;
+      - the keyring is compared with `keyring/` as a whole package;
+      - a refused rollback withdraws nothing.
+      Every test was run at 7744988 and recorded.
+  - Tests at 7744988 (outputs, commands and commits in `docs/evidence/step1b-2026-10-27/`; grassfield main ae121e8):
+    - `tests/run-in-container.sh`: `Ran 52 tests … OK`, nothing skipped;
+    - `tests/release-build.sh`: exit 0, 33 checks, 0 failures;
+    - `tests/e2e.sh`, the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): running at this commit, recorded with the next;
+    - `ci-path.sh`, with `keyring/` as after O11: running at this commit, recorded with the next;
+    - `tests/smoke.sh` on its two builds: after ci-path.sh, recorded with the next;
+    - gitleaks on origin/main..HEAD and the tree: no leaks found; GitHub's `check` job green on each push.
   - The first clean builds found two gaps in grassfield's PKGBUILD makedepends, fixed in grassfield #16 (8509be8, 0338116).
 
 - 2026-10-27, Grassfield Store step 1 (this repository's half; ADR-0037 passed opus review, grassfield b8e97aa, this repository
