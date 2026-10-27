@@ -1,0 +1,11 @@
+{
+  "id": "com.spotify.Client",
+  "source": {"kind": "repo", "repo": "omarchy", "package": "spotify"},
+  "name": {"en": "Spotify"},
+  "summary": {"en": "Stream music and podcasts.", "fr": "Écoutez de la musique et des podcasts en streaming."},
+  "developer": {"en": "Spotify AB"},
+  "license": "LicenseRef-proprietary",
+  "homepage": "https://www.spotify.com/",
+  "desktopId": "spotify.desktop",
+  "categories": ["music-audio"]
+}

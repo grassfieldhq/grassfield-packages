@@ -1,0 +1,14 @@
+{
+  "id": "org.mozilla.firefox",
+  "source": {
+    "kind": "omarchy-setup",
+    "install": "omarchy-install-browser", "args": ["firefox"],
+    "remove": "omarchy-remove-browser", "removeArgs": ["firefox"],
+    "packages": ["firefox"],
+    "changes": {
+      "en": "Installs Firefox, adds Omarchy's browser policy to it and turns on its Wayland mode for your account.",
+      "fr": "Installe Firefox, y ajoute la stratégie de navigateur d'Omarchy et active son mode Wayland pour votre compte."
+    }
+  },
+  "categories": ["internet"]
+}

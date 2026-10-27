@@ -1,0 +1,18 @@
+{
+  "id": "com.valvesoftware.Steam.desktop",
+  "source": {
+    "kind": "omarchy-setup",
+    "install": "omarchy-install-gaming-steam",
+    "remove": "omarchy-remove-gaming-steam",
+    "packages": ["steam"],
+    "changes": {
+      "en": "Installs Steam and the 32-bit graphics drivers for your graphics card, then opens Steam.",
+      "fr": "Installe Steam et les pilotes graphiques 32 bits de votre carte graphique, puis ouvre Steam."
+    },
+    "removes": {
+      "en": "Your Steam folders in your home folder, with the games and their settings.",
+      "fr": "Vos dossiers Steam dans votre dossier personnel, avec les jeux et leurs réglages."
+    }
+  },
+  "categories": ["games"]
+}
