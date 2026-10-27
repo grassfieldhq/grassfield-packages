@@ -68,9 +68,12 @@ BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u
 # by patterns alone, so the scan below is the second line: it runs at pin time (pin refuses to write pins over a finding)
 # and in check-env, to help the person who reads the files. It reads the text as shell and fails closed where it cannot
 # read it: comments dropped, heredoc bodies set apart, every command found after the wrappers that run it (sudo -u x, env,
-# command, exec, timeout...), $(...), `...`, a shell's -c argument and a terminal launcher's command line read as commands
-# too; text it cannot parse, a command named at run time, eval, a script read from a pipe or a heredoc, and pacman's options
-# known only at run time are refused, never guessed.
+# command, exec, timeout, gum ... --, systemd-run...), $(...), `...`, a shell's -c argument and a terminal launcher's
+# command line read as commands too; text it cannot parse, eval, a script read from a pipe or a heredoc, a command made by
+# a substitution, an Omarchy command named at run time, an Omarchy command or a sourced file outside the pinned files, and
+# pacman's options or arguments made at run time are refused, never guessed. A command named by a variable is resolved
+# when the file only ever sets that variable to literal text (pm=pacman); otherwise it is listed for the person reading
+# the files, not refused.
 # A sync makes the next install a partial upgrade (S12): any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or
 # --sysupgrade or a start of them (--ref, --sysu) on pacman, yay or paru, and a yay or paru with no operation (alone it is
 # -Syu; with a term, an interactive AUR install). pacman -U installs a file from outside the repositories. A download runs
@@ -113,7 +116,11 @@ WRAPPERS = {
     "exec": ({"-a"}, 0), "nohup": (set(), 0), "setsid": (set(), 0), "nice": ({"-n"}, 0), "ionice": ({"-c", "-n"}, 0),
     "stdbuf": ({"-i", "-o", "-e"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
     "flock": ({"-w", "-E", "--timeout", "--conflict-exit-code"}, 1), "xargs": ({"-I", "-n", "-P", "-d", "-a", "-L"}, 0),
-    "uwsm-app": (set(), 0),
+    "uwsm-app": (set(), 0), "systemd-run": ({"-u", "--unit", "-p", "--property", "--uid", "--gid", "-E", "--setenv",
+                                            "--description", "--slice", "-M", "--machine", "-H", "--host",
+                                            "--working-directory"}, 0),
+    "runuser": ({"-u", "-g", "-G", "--user", "--group", "--supp-group"}, 0), "chroot": ({"--userspec", "--groups"}, 1),
+    "unshare": (set(), 0), "watch": ({"-n", "--interval", "-d"}, 0),
 }
 PACKAGE_MANAGERS = {"pacman", "yay", "paru"}
 AUR_HELPERS = {"yay", "paru"}
@@ -129,6 +136,13 @@ OMARCHY_CALL = re.compile(r"\b(omarchy-[a-z0-9-]+)\b")
 # Omarchy's two launcher makers download an icon (data, never run: ADR-0037 S9), not code; read again at each pin bump.
 DATA_DOWNLOADS = {"bin/omarchy-webapp-install", "bin/omarchy-tui-install"}
 OMARCHY_SOURCE = re.compile(r"\$\{?OMARCHY_PATH\}?/([A-Za-z0-9_./-]+)")
+# Omarchy's other names for its own folder, read as ${OMARCHY_PATH} so the closure follows them.
+OMARCHY_ROOTS = [
+    (re.compile(r"\$\{?OMARCHY_INSTALL\}?"), "${OMARCHY_PATH}/install"),
+    (re.compile(r"(?<![\w/])/usr/share/omarchy(?=/)"), "${OMARCHY_PATH}"),
+    (re.compile(r"(~|\$\{?HOME\}?)/\.local/share/omarchy(?=/)"), "${OMARCHY_PATH}"),
+]
+OMARCHY_FILE = re.compile(r"^\$\{?OMARCHY_PATH\}?/([A-Za-z0-9_./-]+)$")
 
 
 class Problems:
@@ -607,6 +621,14 @@ def read_lines(path):
         return [line.rstrip("\n") for line in f if line.strip() and not line.startswith("#")]
 
 
+def omarchy_text(rel, text):
+    """A file of Omarchy's with every name of Omarchy's own folder written ${OMARCHY_PATH} (a script's own folder too)."""
+    text = SELF_DIR.sub("${OMARCHY_PATH}/" + os.path.dirname(rel), text)
+    for pattern, root in OMARCHY_ROOTS:
+        text = pattern.sub(root, text)
+    return text
+
+
 def recipe_closure(omarchy, name):
     """The recipe and every Omarchy script or file it calls or sources, transitively: (path, text) pairs."""
     seen, todo, out = set(), [os.path.join("bin", name)], []
@@ -619,7 +641,7 @@ def recipe_closure(omarchy, name):
         if not os.path.isfile(path):
             continue
         with open(path, encoding="utf-8", errors="replace") as f:
-            text = SELF_DIR.sub("${OMARCHY_PATH}/" + os.path.dirname(rel), f.read())
+            text = omarchy_text(rel, f.read())
         out.append((rel, text))
         for call in OMARCHY_CALL.findall(text):
             if os.path.isfile(os.path.join(omarchy, "bin", call)):
@@ -745,7 +767,7 @@ def prepare(code, subs, heredoc=False):
             i += 1
             continue
         if ch == "\\" and i + 1 < n:
-            out.append(" " if code[i + 1] == "\n" and quote is None else ch + code[i + 1])
+            out.append("" if code[i + 1] == "\n" else ch + code[i + 1])  # a line continuation: nothing, as in bash
             i += 2
             continue
         if code.startswith("$((", i):
@@ -860,6 +882,9 @@ def read_command(words, literals, problems, notes, depth):
     if not words:
         return out
     cmd = words[0]
+    m = OMARCHY_FILE.match(cmd)
+    if m and m.group(1).startswith("bin/"):
+        cmd = os.path.basename(m.group(1))  # "$OMARCHY_PATH/bin/omarchy-x": that command
     if PLACEHOLDER in cmd:
         problems.append("a command made at run time by a substitution")
         return out
@@ -896,6 +921,8 @@ def read_command(words, literals, problems, notes, depth):
             problems.append(f"{base} runs code from its input (a pipe or a redirection)")
     elif base in ("source", ".") and (not args or PLACEHOLDER in args[0]):
         problems.append(f"{base} of code made at run time")
+    elif base == "gum" and "--" in args:
+        out += read_command(args[args.index("--") + 1:], literals, problems, notes, depth + 1)  # gum spin ... -- CMD
     elif base == "trap" and args and not args[0].startswith("-"):
         out += simple_commands(args[0], problems, notes, depth + 1)  # run later, when the signal comes
     elif base.startswith("omarchy-launch-") or base in TERMINAL_RUNNERS:
@@ -937,6 +964,10 @@ def command_findings(code, repo=None):
             run_time = [a for a in args if "$" in a or "`" in a or PLACEHOLDER in a]
             if any(a.startswith("-") for a in run_time) or (not ops and run_time):
                 problems.append(f"{cmd}'s options known only at run time")
+            elif any(PLACEHOLDER in a for a in run_time):
+                problems.append(f"{cmd}'s arguments made by a substitution: they could be options")
+            elif any("[@]" in a or "[*]" in a or a in ("$@", "$*") for a in run_time):
+                notes.append(f"{cmd}'s arguments from an array or the script's own arguments: read what they can be")
             if (ops and ops[0].startswith("-U")) or any(abbreviates(a, "upgrade") for a in args):
                 problems.append(f"{cmd} -U: a package file from outside the repositories")
         if cmd in AUR_HELPERS:
@@ -959,6 +990,20 @@ def command_findings(code, repo=None):
     return sync, download, built, problems, notes
 
 
+def outside_closure(code, pinned):
+    """An Omarchy command, or a sourced file, that the closure did not follow (so neither pinned nor scanned)."""
+    found = []
+    for words in simple_commands(code, [], []):
+        cmd, args = words[0], words[1:]
+        if cmd.startswith("omarchy-") and f"bin/{cmd}" not in pinned:
+            found.append(f"an Omarchy command outside the pinned files ({cmd})")
+        if cmd in ("source", ".") and args:
+            m = OMARCHY_FILE.match(args[0])
+            if not m or m.group(1) not in pinned:
+                found.append(f"sources a file outside the pinned files ({args[0]})")
+    return found
+
+
 def is_shell(rel, text):
     first = text.split("\n", 1)[0]
     return rel.endswith(".sh") or (first.startswith("#!") and re.search(r"\b(ba|z|da|k)?sh\b", first) is not None)
@@ -972,11 +1017,13 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
     if not os.path.isfile(path):
         return [f"{name} is not in the pinned Omarchy release"]
     problems = []
-    for rel, text in recipe_closure(omarchy, name):
+    closure = recipe_closure(omarchy, name)
+    pinned = {rel for rel, _ in closure}
+    for rel, text in closure:
         if not is_shell(rel, text):
             continue  # a data or QML file: pinned, never run as shell
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        plain = code.replace("\\\n", " ").replace('"', "").replace("'", "")
+        plain = code.replace("\\\n", "").replace('"', "").replace("'", "")
         sync, download, built, other, seen = command_findings(code, repo)
         if notes is not None:
             notes += [f"{rel}: {note}" for note in sorted(set(seen))]
@@ -989,7 +1036,7 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
             built = []
         if built:
             problems.append(f"{name} builds from the AUR (through {rel}): {', '.join(sorted(set(built)))} (ADR-0037 a)")
-        for problem in sorted(set(other)):
+        for problem in sorted(set(other) | set(outside_closure(code, pinned))):
             problems.append(f"{name} cannot be judged (through {rel}): {problem}")
     with open(path, encoding="utf-8", errors="replace") as f:
         own = f.read()
@@ -1059,12 +1106,17 @@ def pin(src, omarchy, facts, p):
     """Writes the pins of catalog/omarchy.lock for the checkout, after the scan finds nothing; returns the changes."""
     lock = os.path.join(src, "omarchy.lock")
     commit = next((line.split()[1] for line in read_lines(lock) if line.startswith("commit ")), None)
+    head = None
     if os.path.isdir(os.path.join(omarchy, ".git")):
         head = subprocess.run(["git", "-C", omarchy, "rev-parse", "HEAD"], capture_output=True, text=True,
                               stdin=subprocess.DEVNULL).stdout.strip()
-        if head != commit:
-            p.add(omarchy, f"the checkout is at {head or '?'}, omarchy.lock names {commit}: bump the commit first")
-            return []
+    elif os.path.isfile(os.path.join(omarchy, ".commit")):
+        with open(os.path.join(omarchy, ".commit"), encoding="utf-8") as f:
+            head = f.read().strip()  # a checkout without git: catalog-facts.sh reads the same file
+    if not commit or head != commit:
+        p.add(omarchy, f"the checkout is at {head or 'an unknown commit (no .git, no .commit)'}, omarchy.lock names "
+                       f"{commit}: pins are written only for the commit the lock names")
+        return []
     obj, _ = load_sources(src, p)
     validate_catalog(obj, p)
     repo = None

@@ -469,6 +469,44 @@ class Recipes(unittest.TestCase):
         self.assertEqual((sync, download, built, problems), (False, False, [], []))
         self.assertTrue(any("$c" in n for n in notes), notes)
 
+    def test_what_pr_4s_merge_left(self):
+        # The five MINORs of PR #4's merge comment.
+        rp = catalog.recipe_problems
+        repo = {"game", "a"}
+        # 1. The closure: a split Omarchy name, Omarchy's other names for its folder, a path with a variable segment.
+        self.script("omarchy-x", "echo x")
+        self.script("omarchy-install-split", '"omar""chy-x" now')
+        self.script("omarchy-install-escaped", "omar\\chy-x now")
+        self.assertIn("an Omarchy command outside the pinned files (omarchy-x)", rp(self.omarchy, "omarchy-install-split", [], repo)[0])
+        self.assertIn("an Omarchy command outside the pinned files (omarchy-x)", rp(self.omarchy, "omarchy-install-escaped", [], repo)[0])
+        for root in ('"$OMARCHY_INSTALL/helpers/x.sh"', "/usr/share/omarchy/install/helpers/x.sh",
+                     "~/.local/share/omarchy/install/helpers/x.sh", '"$HOME/.local/share/omarchy/install/helpers/x.sh"'):
+            with self.subTest(root):
+                self.script("omarchy-install-root", f"source {root}\nomarchy-pkg-add a")
+                # followed into the closure: pinned, and scanned (x.sh syncs)
+                self.assertIn("install/helpers/x.sh", [rel for rel, _ in catalog.recipe_closure(self.omarchy, "omarchy-install-root")])
+                self.assertIn("syncs pacman's databases (through install/helpers/x.sh)",
+                              "\n".join(rp(self.omarchy, "omarchy-install-root", [], repo)))
+        self.script("omarchy-install-varpath", 'name=x\nsource "$OMARCHY_PATH/install/helpers/$name.sh"')
+        self.assertIn("sources a file outside the pinned files", "\n".join(rp(self.omarchy, "omarchy-install-varpath", [], repo)))
+        self.script("omarchy-install-elsewhere", "source /etc/profile.d/x.sh")
+        self.assertIn("sources a file outside the pinned files (/etc/profile.d/x.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-elsewhere", [], repo)))
+        # 2. A backslash at a line's end joins the lines with nothing.
+        self.script("omarchy-install-continued", "pac\\\nman -Sy game")
+        self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-continued", [], repo)[0])
+
+        # 3. Wrappers and expansions.
+        def finds(code):
+            return catalog.command_findings(code, repo)
+        self.assertTrue(finds("pm=pacman; gum spin --title x -- $pm -Sy x")[0])
+        self.assertTrue(any("$pm" in n for n in finds("gum spin -- $pm -Sy x")[4]))  # unresolved: a note
+        self.assertTrue(finds("pm=pacman; systemd-run $pm -Sy x")[0])
+        self.assertTrue(finds("sudo systemd-run --uid 1000 -p X=1 pacman -Syu")[0])
+        self.assertIn("pacman's arguments made by a substitution: they could be options", finds("pacman -S $(cat list)")[3])
+        self.assertTrue(any("from an array" in n for n in finds('pkgs=(a b); pacman -S "${pkgs[@]}"')[4]))
+        self.assertTrue(any("from an array" in n for n in finds('sudo pacman -S --noconfirm --needed "$@"')[4]))
+
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)
         self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
@@ -509,11 +547,23 @@ class Recipes(unittest.TestCase):
         lock = os.path.join(src.src, "omarchy.lock")
         with open(lock, "w") as f:
             f.write("# the pinned release\ntag v4.0.4\ncommit c668141e9c42b13c80c9ca4ea108e11708c5e8a5\n")
+        # 4. The checkout's commit: from .git, or from .commit as catalog-facts.sh reads it; neither, or another: refused.
+        commit = os.path.join(self.omarchy, ".commit")
         tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "catalog.py")
 
         def pin():
             return subprocess.run([sys.executable, "-I", tool, "pin", "--src", src.src, "--omarchy", self.omarchy],
                                   capture_output=True, text=True)
+        run = pin()
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("an unknown commit (no .git, no .commit)", run.stderr)
+        with open(commit, "w") as f:
+            f.write("0" * 40 + "\n")
+        run = pin()
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("the checkout is at " + "0" * 40, run.stderr)
+        with open(commit, "w") as f:
+            f.write("c668141e9c42b13c80c9ca4ea108e11708c5e8a5\n")
         run = pin()
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn("new      bin/omarchy-pkg-add", run.stdout)
