@@ -12,7 +12,8 @@
 #   1. ID must be an existing snapshot of the channel, other than the current one, whose release is older;
 #   2. the release builds of the channel newer than ID's release are withdrawn: moved from releases/<channel>/ to
 #      withdrawn/<channel>/, where the channel's publisher, which publishes the newest release build, never reads them, so
-#      its next run does not put the bad release back; a newer tag's release build is published as usual;
+#      its next run does not put the bad release back; a newer tag's release build is published as usual; they come back
+#      if the publisher refuses the rollback (step 3), so a refused rollback changes nothing;
 #   3. the channel's one publisher writes the new snapshot (tools/publish.py --rollback-to: ID's databases and notes with
 #      their signatures, checked against --keyring-dir first, the current snapshot's other files such as the catalog, the
 #      pointer only if it has not moved).
@@ -49,7 +50,9 @@ release_of() { python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]
 release=$(release_of "$old/manifest.json") was=$(release_of "$dir/snap/$cur/manifest.json")
 (($(vercmp "$release" "$was") < 0)) || die "$to holds release $release, not older than the current $was"
 
-# The bad releases leave what the publisher reads, before the rollback is published.
+# The bad releases leave what the publisher reads before the rollback is published (so that no run in between can publish
+# them again), and come back if the publisher refuses the rollback: a refused rollback withdraws nothing.
+withdrawn=()
 for rel in "$tree/releases/$channel"/*/; do
   [[ -d $rel ]] || continue
   v=$(basename "$rel")
@@ -57,8 +60,15 @@ for rel in "$tree/releases/$channel"/*/; do
     mkdir -p "$tree/withdrawn/$channel"
     [[ ! -e $tree/withdrawn/$channel/$v ]] || die "withdrawn/$channel/$v exists already"
     mv "${rel%/}" "$tree/withdrawn/$channel/$v"
+    withdrawn+=("$v")
     echo "$channel: release build $v withdrawn"
   fi
 done
 
-python3 -I "$here/tools/publish.py" --store "$tree" --channel "$channel" --keyring-dir "$keyring_dir" --rollback-to "$to"
+if ! python3 -I "$here/tools/publish.py" --store "$tree" --channel "$channel" --keyring-dir "$keyring_dir" --rollback-to "$to"; then
+  for v in "${withdrawn[@]}"; do
+    mv "$tree/withdrawn/$channel/$v" "$tree/releases/$channel/$v"
+    echo "$channel: release build $v put back"
+  done
+  die "the publisher refused the rollback: nothing changed"
+fi
