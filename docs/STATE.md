@@ -20,65 +20,54 @@ Last updated: 2026-10-27
   legal, publication, keys, secrets, root rights, security rules, money and irreversible actions still asked) applies here
   too; CLAUDE.md's "Decisions" line is unchanged until the owner amends it.
 - 2026-10-27, branch `claude/software-update-step1` (Software Update step 1b, the infrastructure of grassfield ADR-0033,
-  whose client is grassfield PR #16): PR to main; nothing published, no secret, no tag, no release.
+  whose client is grassfield PR #16): PR #3 to main; nothing published, no secret, no tag, no release.
   - `keyring/`: grassfield-keyring, files in `/usr/share/grassfield/pacman-keyring/`, populate-from only with keys and only
     while `/etc/pacman.d/grassfield.conf` exists, `pre_remove` deletes its trusted keys; NO KEY until O11 (empty files).
   - `build/pacman.conf`: Omarchy's stable mirror (Hyprland 0.56.2-4, quickshell 0.3.2-1, Qt 6.11.2, KF6 6.31 in [extra]).
-  - `scripts/build-channel.sh`:
-    - grassfield's own PKGBUILD, keyring built first and once per version;
-    - names and `replaces=` checked; packages, databases and notes signed with throwaway keys only (it refuses to start
-      beside the project's key);
-    - the release build; immutable package names; never a package older than the current snapshot's;
-    - snapshot and pointer in the publisher's format (`snapshot.py`); the build record.
-    Beside it: `notes.py`, `check-tree.sh` (`--trusted`), `sign-release.sh`, `snapshot.py`, `rollback.sh` (withdraws the
-    newer release builds), `view.sh`, `serve.py`.
-  - `.github/workflows/`, every action pinned to a commit SHA. Not run: no deploy key exists, and nothing may be
-    published.
-    - build (workflow_dispatch, a tag or a pkgrel rebuild):
-      - build: a throwaway key, check-tree, the artifact;
-      - test: smoke.sh;
-      - release, `if: false`, per channel in the publisher's environments `publish-<channel>`: the tested release build
-        signed with the project's key in a container that runs no build, checked with `check-tree --trusted`, and kept
-        under `releases/` (never replaced, its database last).
-    - poll: every 15 min, off until `GRASSFIELD_TAG_POLL=on`.
-    - watch-hyprland: by hand only.
-  - Publication: the one serialized publisher per channel is Grassfield Store step 1's (ADR-0037 g and its Consequences;
-    PR #2's `publish.yml` and `tools/publish.py`). This PR's own `publish.yml` (written while resolving the conflict with
-    PR #1) rebuilt each tag at publication, against ADR-0037 g ("each tag is built once", its packages, databases and notes
-    kept where the publisher reads them), and doubled PR #2's: removed, with `newest-release.sh`, its test and
-    `--channel`. Instead `build-channel.sh` writes each release build `releases/<channel>/<version>/` (a database of the
-    release alone, notes with the channel's earlier releases from the tag's own tags, grassfield-keyring built once per
-    version), the layout `tools/publish.py --releases` reads, and makes the test tree's snapshots from it as the
-    publisher does.
-  - After the integrator's opus review of e373590 (FAIL: 1 BLOCKER, 5 MAJOR, minors; integrator decision: PR #2 merges
-    first, then this branch merges main and makes its `tools/publish.py` the only publisher):
-    - B1: the test tree uses the publisher's format: pointer `{"snapshot": "<id>"}` and `manifest.json`. The catalog is
-      kept in each new snapshot. The release job uses the `publish-<channel>` environments. Nothing is rebuilt at
-      publication.
-    - M1: the project's key never meets a build.
-    - M2: a stored release build is never replaced; a published package is used as it is (the counter-case is refused by
-      `tools/publish.py`).
-    - M3: a rollback withdraws the newer release builds.
-    - M4: `check-tree --trusted`.
-    - M5: the pkgrel path is fixed and tested end to end.
-    - Minors: actions pinned and credentials per step; stronger assertions, and a skip in CI fails; `--to` validated;
-      the evidence re-recorded with its commits.
-  - Tests on 3a6a138, grassfield main ae121e8 (outputs and commands in `docs/evidence/step1b-2026-10-27/`):
-    - `tests/e2e.sh` with the REAL packages built four times (1.0.0, 1.0.1, 1.0.1 pkgrel 4, 1.1.0-beta1): exit 0, 43
-      checks (330 PASS lines with check-tree's), 0 FAIL.
-      It covers:
-      - the first installation per ADR-0033 b.3a, and Set Up through real pkexec;
-      - updates seen with verified notes and installed, and the pkgrel rebuild's note;
-      - a rogue database, packages and notes refused;
-      - beta and back without a downgrade;
-      - a rollback over HTTP by a new snapshot, with the newer release builds withdrawn;
-      - removal, and the keyless keyring trusting nothing;
-    - `tests/release-build.sh`: exit 0, 17 checks, 0 FAIL;
-    - the CI path, run locally (build job's inline script and `tests/smoke.sh`, v1.0.0-rc1 and v1.0.0-rc2 in fresh
-      trees): exit 0, 0 failures each;
-    - interface with PR #2's `tools/publish.py` (e05f23e, unmerged): the release builds signed and published, a client
-      installing rc1 then rc2; without `--published` the publisher refuses: exit 0, 15 checks, 0 FAIL;
-    - gitleaks v8.18.4 on origin/main..HEAD and on the tree: no leaks found.
+  - `scripts/build-channel.sh`: one tag built once with grassfield's own PKGBUILD:
+    - grassfield-keyring is built first, and once per version;
+    - names and `replaces=` are checked; packages, databases and notes are signed with throwaway keys only (it refuses
+      to start beside the project's key);
+    - it writes the release build `releases/<channel>/<version>/`: a database of the release alone, and notes with the
+      channel's earlier releases from the tag's own tags;
+    - the channel tree is written by the one publisher, `tools/publish.py --releases`; then the build record.
+  - The other scripts:
+    - `notes.py`;
+    - `check-tree.sh`: `--trusted` checks signatures as a client does; `--keyring-src` checks the keyring byte for
+      byte; manifests; a release build holding nothing else;
+    - `sign-release.sh`: `prepare` without the key, `sign` with gpg only;
+    - `rollback.sh`: the newer release builds withdrawn, then `tools/publish.py --rollback-to`;
+    - `snapshot.py`: reads the pointer;
+    - `view.sh`, `serve.py`.
+  - Publication: the one serialized publisher per channel is `tools/publish.py` and `publish.yml` (ADR-0037 g), merged
+    from PR #2.
+    - This branch merged main (6b6a755, integrator decision) and made it the only writer of snapshots.
+    - It added ADR-0033 h.2's deliberate rollback to the publisher (`--rollback-to`, 2 unit tests).
+    - It extended `publish.yml` to package snapshots: it starts when the build workflow completes, and reads the
+      release builds from `releases/<channel>/`.
+    - This branch's own earlier `publish.yml` (rebuilt each tag at publication) and `newest-release.sh` are gone.
+  - `.github/workflows/build.yml` (actions pinned to commit SHAs; not run: no deploy key exists, and nothing may be
+    published). On demand, a tag or a pkgrel rebuild:
+    - build: a throwaway key, check-tree, the artifact;
+    - test: `smoke.sh`;
+    - release, `if: false`, per channel in `publish-<channel>`:
+      - exact-key lookups;
+      - prepare in a container without the key or network;
+      - sign in a container with the key, gpg only, no network;
+      - check without the key (`check-tree --trusted --keyring-src keyring/`);
+      - upload under `releases/`, the database last, never replacing a stored release build.
+    - `poll` (off until `GRASSFIELD_TAG_POLL=on`) and `watch-hyprland` (by hand).
+  - Integrator reviews:
+    - Opus review of e373590: FAIL (B1, M1-M5, minors), all addressed (comment 6439709205).
+    - Counter-review of a0a1cad: FAIL (one MAJOR left, M1: repo-add evaluates .PKGINFO lines, and ran where the key was;
+      minors 1-4), addressed in 620e487..08a6677:
+      - signing in two steps and three containers;
+      - a crafted-package test;
+      - head-object lookups;
+      - the keyring compared with `keyring/`;
+      - checks counted by the tests themselves.
+    - The unification after PR #2's merge (comment 6440650953): 6b6a755..d7a6d2e.
+  - Tests: the runs on 6d96057 and 08a6677 are in progress at this commit; recorded with the next one.
   - The first clean builds found two gaps in grassfield's PKGBUILD makedepends, fixed in grassfield #16 (8509be8, 0338116).
 
 - 2026-10-27, Grassfield Store step 1 (this repository's half; ADR-0037 passed opus review, grassfield b8e97aa, this repository
@@ -121,8 +110,8 @@ Last updated: 2026-10-27
     Audio" / « Musique et audio », "Development" / « Développement ».
 
 ## Tests run
-- Software Update step 1b: see its entry above (end-to-end, release-build, the CI path, the interface with the Store's
-  publisher), and the unification below.
+- Software Update step 1b: see its entry above (unit tests, release-build, the end-to-end, the CI path with keyring/ as
+  after O11, GitHub's `check` job).
 - Store step 1 review fixes: `tests/run-in-container.sh --network host` (throwaway archlinux:base container): `Ran 40 tests
   … OK`, exit 0, nothing skipped (the signature and publisher tests make throwaway ed25519 keys there). Outside a
   container: `Ran 40 tests … OK (skipped=21)`. `python3 -I tools/catalog.py validate`: ok.
@@ -146,7 +135,7 @@ Last updated: 2026-10-27
   section and category names and the publishers' icons need the M5 legal review before any publication (ST10).
 
 ## Next
-- Software Update step 1b (ADR-0033): the integrator's re-review of PR #3 (the unification with the Store's publisher);
+- Software Update step 1b (ADR-0033): the integrator's re-review of PR #3 (the counter-review's fixes and the unification);
   then grassfield's one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21); step 2 (the pane)
   in grassfield after its Settings PRs #8-#10.
 - Grassfield Store: the step 1 follow-up MINORs of the publisher (release `.sig` checked with gpgv before upload, the
