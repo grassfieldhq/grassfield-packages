@@ -74,6 +74,20 @@ Last updated: 2026-10-27
   - A deeply nested JSON file is a one-line problem (RecursionError), never a traceback.
   - `publish.yml` and STATE name the owner's step: create and protect the `publish-<channel>` environments before
     `if: false` is removed (GitHub creates a missing one unprotected).
+  - After the review of ed69656 (FAIL, the recipe check did not fail closed), the integrator's decision: the pins are the
+    control. `catalog/omarchy.lock` records the SHA-256 of every Omarchy file the setups run or read (43 for v4.0.4's
+    browser, Steam and Heroic setups, written by `catalog.py pin` in a throwaway container against the checkout at
+    c668141); check-env refuses any file that differs, is missing or is not pinned. The scan is the second line, rewritten
+    as a shell reader that fails closed (comments and heredoc bodies apart, `$(...)`, backquotes, process substitutions,
+    arithmetic, `[[ ]]`, `case` patterns and arrays read as the shell reads them): it refuses text it cannot read, `eval`,
+    a script read from a pipe or a heredoc, a command made by a substitution, an Omarchy command named at run time,
+    pacman's options known only at run time, `-U`, the starts of `--refresh`/`--sysupgrade`, aria2c, rsync, flatpak and
+    their kin, `git submodule`, an interpreter's network code; a variable set only to literal text is resolved (`pm=pacman;
+    $pm -Sy` is a sync); one it cannot resolve is printed by pin for the person reading ("read: …", 4 for v4.0.4). Over
+    Omarchy v4.0.4's 63 recipes, 22 are refused; the catalog's three setups pass. The publisher verifies a release's
+    signatures before bsdtar reads its database.
+  - **The 43 pinned files still need a person's reading** (the pin says nobody changed them, not that they are safe): the
+    owner's or the integrator's, before publishing is enabled.
   - Parity with grassfield PR #21's review: a `.sig` that is a signed message of its own (PLAINTEXT) is refused;
     `catalog-facts.sh` checks Arch's AppStream package with gpg on a copy of pacman's keyring (one good detached signature,
     TRUST_FULLY or TRUST_ULTIMATE, the key not disabled) instead of `pacman-key --verify`, whose exit code is 0 for any key
