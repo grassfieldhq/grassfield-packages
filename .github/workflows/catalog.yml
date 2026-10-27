@@ -1,0 +1,94 @@
+# Grassfield Store catalog (grassfieldhq/grassfield ADR-0037 g). CI produces artifacts only: nothing is published until the
+# owner decides, after the M5 legal review (CLAUDE.md). The catalog is signed here with a throwaway key made in this job's
+# container and gone with it; the artifact carries that key's public half so the result can be checked. No secret is read.
+name: catalog
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
+    concurrency:
+      group: catalog-check-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Tools (a whole upgrade, never -Sy alone)
+        run: pacman -Syu --noconfirm --needed git python gnupg
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Unit tests (throwaway keys, made in this container)
+        run: python3 -I -m unittest discover -s tests -v
+
+      - name: Validate the sources
+        run: python3 -I tools/catalog.py validate
+
+      - name: The pinned Omarchy release (data)
+        run: |
+          tag=$(awk '$1 == "tag" {print $2}' catalog/omarchy.lock)
+          git clone --quiet --depth 1 --branch "$tag" https://github.com/basecamp/omarchy /tmp/omarchy
+
+      - name: Facts from Omarchy's stable mirror, Arch's AppStream and Flathub (data)
+        run: bash tools/catalog-facts.sh /tmp/omarchy catalog /tmp/facts
+
+      - name: Check the catalog against them
+        run: python3 -I tools/catalog.py check-env --facts /tmp/facts --omarchy /tmp/omarchy
+
+      - name: Build, sign with a throwaway key, verify as the Store does
+        run: |
+          set -euo pipefail
+          export GNUPGHOME=$(mktemp -d)
+          gpg --batch --pinentry-mode loopback --passphrase '' \
+            --quick-gen-key 'Grassfield CI throwaway <ci-throwaway@grassfield.invalid>' ed25519 sign 1d
+          fpr=$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" {print $10; exit}')
+          serial=$(date -u +%s)
+          keyring=/tmp/artifact/throwaway-keyring
+          mkdir -p "$keyring"
+          gpg --batch --export "$fpr" >"$keyring/grassfield.gpg"
+          echo "$fpr:4:" >"$keyring/grassfield-trusted"
+          : >"$keyring/grassfield-revoked"
+          for channel in stable beta; do
+            out=/tmp/artifact/$channel/x86_64
+            python3 -I tools/catalog.py build --channel "$channel" --serial "$serial" --out "$out"
+            python3 -I tools/catalog.py sign --homedir "$GNUPGHOME" --key "$fpr" "$out/grassfield-catalog.v1.json"
+            python3 -I tools/catalog.py verify --keyring-dir "$keyring" --channel "$channel" "$out"
+          done
+          rm -rf "$GNUPGHOME"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: catalog-signed-with-a-throwaway-key
+          path: /tmp/artifact
+          retention-days: 7
+
+  publish:
+    # Disabled: nothing is published until the owner decides, after the M5 legal review (CLAUDE.md, ADR-0033 h). Once
+    # enabled, with the host chosen (ADR-0033 O8) and the owner's key and storage credentials as secrets: one run at a time
+    # per channel, never cancelled half way, and each run publishes the latest state (tools/publish.py): the newest release
+    # built for the channel and this catalog, built from the current snapshot, with a conditional pointer write.
+    if: false
+    needs: check
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        channel: [stable, beta]
+    concurrency:
+      group: publish-${{ matrix.channel }}
+      cancel-in-progress: false
+    steps:
+      - name: Disabled
+        run: |
+          echo "Publishing is disabled until the owner decides (CLAUDE.md); the bucket's backend waits for the host." >&2
+          exit 1

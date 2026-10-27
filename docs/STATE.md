@@ -20,14 +20,36 @@ Last updated: 2026-10-27
   legal, publication, keys, secrets, root rights, security rules, money and irreversible actions still asked) applies here
   too; CLAUDE.md's "Decisions" line is unchanged until the owner amends it.
 
+- 2026-10-27, Grassfield Store step 1 (this repository's half; ADR-0037 passed opus review, grassfield b8e97aa, this repository
+  c14b14a), branch claude/pensive-thompson-fhk5um from main:
+  - `catalog/`: categories (9), the Discover section, 13 apps (8 Arch packages, 2 `[omarchy]` packages, 3 Omarchy setups:
+    Firefox, Steam, Heroic), the pinned Omarchy release (v4.0.4, c668141); our texts in English and French; no icon yet.
+  - `tools/catalog.py`: every rule of ADR-0037 g (format, lengths, plain text, patterns of e.5, cross-references), the
+    sources' own rules (file names, icons as PNG within 256 KiB and 512x512 with licence, origin and the legal-review mark),
+    `check-env` against facts (the repository and package of each app on Omarchy's stable mirror, an application entry for
+    each package (SD1), the desktop id among its entries, the AppStream id spelled as AppStream spells it, recipes present in
+    the pinned release with a case for each argument, never syncing nor downloading code through anything they call or
+    source, Flathub ids), a deterministic build (`generated` from the serial), signing, and the Store's verification
+    (gpgv, VALIDSIG's argument 10 in grassfield-trusted, not in grassfield-revoked, channel, serial, icon hashes).
+  - `tools/catalog-facts.sh`: the facts, in a throwaway Arch container on Omarchy's stable configuration (the AppStream
+    package checked by `pacman-key --verify`).
+  - `tools/publish.py`: one publisher per channel that publishes the latest state, builds from the current snapshot, never
+    goes backwards, uploads immutable names once and writes the pointer by compare-and-swap; `LocalStore` only (the
+    bucket's backend waits for the host, O8); disabled in CI.
+  - `.github/workflows/catalog.yml`: tests, checks, both channels built, signed with a throwaway key and verified, kept as
+    an artifact 7 days; the publish job `if: false`, no secret. Actions pinned by commit.
+  - Carried into step 3 (integrator, PASS of step 0): SD2's sheet keeps "Action: <id>" and the helper's path under the
+    plain words; the helper's `install` applies SD1's app-entry rule too, or the gap is accepted in writing.
+
 ## Tests run
-- None (docs only).
+- Step 1: `tests/run-in-container.sh` (throwaway archlinux:base container): 28 tests OK (the signature tests make throwaway
+  ed25519 keys there). The CI check job replayed step by step in a throwaway container: docker exit 0 (validate ok,
+  15792 packages, 41 entries and 1604 AppStream components gathered, check-env ok, both channels built, signed, verified).
+- Step 0: none (docs only).
 
 ## Next
-- Wait for ADR-0033 (Software Update) and ADR-0037 (Store) to pass review in grassfieldhq/grassfield; they fix the
-  contracts this repository implements.
-- Then (ADR-0033): build from a Grassfield tag in a clean Arch container (with the Hyprland of Omarchy's stable channel, see
-  grassfield ADR-0009), signing, `grassfield-keyring`, `repo-add` per channel, CI producing the channel repository as an
-  artifact. No publication.
-- Then (ADR-0037 step 1): `catalog/` sources, the build and validation tool (standard-library Python), a CI job producing the
-  signed catalog with a throwaway key, the serialized publisher written and disabled.
+- The integrator's review of the step-1 PR (opus for the signature, the verification and CI).
+- ADR-0033's half of this repository (its own step): building from a Grassfield tag in a clean Arch container, signing,
+  `grassfield-keyring`, `repo-add` per channel, CI producing the channel repository as an artifact; publish.py's release
+  folders are what that build leaves. No publication.
+- The Store's later steps add to the catalog (more sections, icons for apps without metadata after the legal review).

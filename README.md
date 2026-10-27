@@ -26,6 +26,16 @@ catalog of Grassfield Store.
   release built and signed for the channel and the catalog of `main`'s head. A cancelled waiting run loses nothing; a run
   with nothing new writes nothing.
 
+## Layout
+| Path | What |
+|---|---|
+| `catalog/` | the Store catalog's sources: categories, sections, apps, icons, the pinned Omarchy release (`catalog/README.md`) |
+| `tools/catalog.py` | validates the sources, checks them against what they name, builds, signs and verifies the catalog (standard library) |
+| `tools/catalog-facts.sh` | gathers those facts in a throwaway Arch container: Omarchy's stable mirror, Arch's AppStream, Flathub |
+| `tools/publish.py` | the serialized publisher of a channel, written and disabled (the bucket's backend waits for the host) |
+| `tests/` | unit tests; `tests/run-in-container.sh` runs them where throwaway keys may be made |
+| `.github/workflows/catalog.yml` | CI: tests, checks, a catalog signed with a throwaway key as an artifact; publishing disabled |
+
 ## Status
 Nothing is published. The repository stays private until the owner decides, after the legal review of milestone M5.
 CI produces artifacts only; the publishing step is disabled.
