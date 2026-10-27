@@ -1,0 +1,104 @@
+{
+  "order": 30,
+  "id": "work",
+  "title": {
+    "en": "Work",
+    "fr": "Travailler"
+  },
+  "symbol": "work",
+  "blocks": [
+    {
+      "kind": "hero",
+      "items": [
+        {
+          "app": "net.thunderbird.Thunderbird",
+          "eyebrow": {
+            "en": "Mail",
+            "fr": "Courrier"
+          },
+          "title": {
+            "en": "All your mail in one place",
+            "fr": "Tout votre courrier au même endroit"
+          },
+          "text": {
+            "en": "Several accounts, a calendar and your contacts, on your computer.",
+            "fr": "Plusieurs comptes, un calendrier et vos contacts, sur votre ordinateur."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "cards",
+      "items": [
+        {
+          "app": "org.keepassxc.KeePassXC.desktop",
+          "eyebrow": {
+            "en": "Passwords",
+            "fr": "Mots de passe"
+          },
+          "title": {
+            "en": "One password to remember",
+            "fr": "Un seul mot de passe à retenir"
+          },
+          "text": {
+            "en": "Keep every other one in an encrypted file that stays yours.",
+            "fr": "Gardez tous les autres dans un fichier chiffré qui reste le vôtre."
+          }
+        },
+        {
+          "app": "signal.desktop",
+          "eyebrow": {
+            "en": "Messages",
+            "fr": "Messages"
+          },
+          "title": {
+            "en": "Private conversations",
+            "fr": "Des conversations privées"
+          },
+          "text": {
+            "en": "Messages and calls encrypted from end to end.",
+            "fr": "Messages et appels chiffrés de bout en bout."
+          }
+        },
+        {
+          "app": "com.github.johnfactotum.Foliate",
+          "eyebrow": {
+            "en": "Reading",
+            "fr": "Lecture"
+          },
+          "title": {
+            "en": "A quiet place to read",
+            "fr": "Un endroit calme pour lire"
+          },
+          "text": {
+            "en": "Open your e-books and read them page by page or as one long scroll.",
+            "fr": "Ouvrez vos livres numériques et lisez-les page par page ou d'un seul défilement."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {
+        "en": "Stay in touch",
+        "fr": "Rester en contact"
+      },
+      "apps": [
+        "net.thunderbird.Thunderbird",
+        "signal.desktop",
+        "org.mozilla.firefox"
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {
+        "en": "Get things done",
+        "fr": "Avancer"
+      },
+      "apps": [
+        "org.keepassxc.KeePassXC.desktop",
+        "com.github.johnfactotum.Foliate"
+      ]
+    }
+  ]
+}

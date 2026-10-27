@@ -1,0 +1,121 @@
+{
+  "order": 20,
+  "id": "create",
+  "title": {
+    "en": "Create",
+    "fr": "Créer"
+  },
+  "symbol": "create",
+  "blocks": [
+    {
+      "kind": "hero",
+      "items": [
+        {
+          "app": "org.kde.krita",
+          "eyebrow": {
+            "en": "Digital painting",
+            "fr": "Peinture numérique"
+          },
+          "title": {
+            "en": "Brushes that feel like paper",
+            "fr": "Des pinceaux comme sur papier"
+          },
+          "text": {
+            "en": "Paint, sketch and ink with brushes you can shape to your hand.",
+            "fr": "Peignez, esquissez et encrez avec des pinceaux que vous réglez à votre main."
+          }
+        },
+        {
+          "app": "org.darktable.darktable",
+          "eyebrow": {
+            "en": "Photography",
+            "fr": "Photographie"
+          },
+          "title": {
+            "en": "Develop your raw photos",
+            "fr": "Développez vos photos brutes"
+          },
+          "text": {
+            "en": "Light, colour and lenses, adjusted without ever touching the original.",
+            "fr": "Lumière, couleurs et objectifs, réglés sans jamais toucher l'original."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "cards",
+      "items": [
+        {
+          "app": "com.github.flxzt.rnote",
+          "eyebrow": {
+            "en": "Handwriting",
+            "fr": "Écriture manuscrite"
+          },
+          "title": {
+            "en": "Notes and sketches by hand",
+            "fr": "Notes et croquis à la main"
+          },
+          "text": {
+            "en": "Write with a pen tablet on pages that never run out.",
+            "fr": "Écrivez avec une tablette sur des pages qui ne s'arrêtent jamais."
+          }
+        },
+        {
+          "app": "org.blender.Blender",
+          "eyebrow": {
+            "en": "3D creation",
+            "fr": "Création 3D"
+          },
+          "title": {
+            "en": "From a cube to a whole film",
+            "fr": "D'un cube à un film entier"
+          },
+          "text": {
+            "en": "Modelling, animation, rendering and editing in one app.",
+            "fr": "Modélisation, animation, rendu et montage dans une seule app."
+          }
+        },
+        {
+          "app": "org.audacityteam.Audacity",
+          "eyebrow": {
+            "en": "Audio",
+            "fr": "Audio"
+          },
+          "title": {
+            "en": "Record and edit sound",
+            "fr": "Enregistrer et monter le son"
+          },
+          "text": {
+            "en": "Cut, mix and clean up recordings, from podcasts to music.",
+            "fr": "Coupez, mixez et nettoyez vos enregistrements, du podcast à la musique."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {
+        "en": "Pictures",
+        "fr": "Images"
+      },
+      "apps": [
+        "org.gimp.GIMP",
+        "org.kde.krita",
+        "org.inkscape.Inkscape",
+        "org.darktable.darktable",
+        "com.github.flxzt.rnote"
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {
+        "en": "Sound and 3D",
+        "fr": "Son et 3D"
+      },
+      "apps": [
+        "org.audacityteam.Audacity",
+        "org.blender.Blender"
+      ]
+    }
+  ]
+}
