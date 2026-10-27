@@ -36,14 +36,16 @@ the project's signing key (ADR-0033 O11, O20).
 |---|---|
 | `keyring/` | `grassfield-keyring`: `PKGBUILD`, its install script, and `grassfield.gpg`, `grassfield-trusted`, `grassfield-revoked` (empty until the owner's key), installed in Grassfield's private folder `/usr/share/grassfield/pacman-keyring/` (ADR-0033 b.2) |
 | `build/pacman.conf` | the build container's package set: Omarchy's stable mirror, so Hyprland, Qt and KF6 are the versions Omarchy's stable users run (ADR-0033 f) |
-| `scripts/build-channel.sh` | one Grassfield tag or commit → makepkg of grassfield's own PKGBUILD → signed packages → a new signed snapshot (database, files, release notes) of each channel it goes to → the pointer |
+| `scripts/build-channel.sh` | one Grassfield tag or commit → makepkg of grassfield's own PKGBUILD → signed packages → a new signed snapshot (database, files, release notes) of each channel it goes to (or of one, `--channel`) → the pointer |
+| `scripts/newest-release.sh` | the release a channel's publisher publishes: the newest tag built for the channel, if newer than its snapshot |
 | `scripts/notes.py` | `grassfield-notes.json` from grassfield's `packaging/release-notes/<VERSION>.{en,fr}.txt` |
 | `scripts/check-tree.sh` | the tree against the contract: signatures, names, no `replaces=`, notes, no links |
 | `scripts/rollback.sh` | a rollback is a new snapshot with older packages, never the pointer moved back (ADR-0033 h.2, R4) |
 | `scripts/view.sh`, `scripts/serve.py` | for tests: the tree as the hosting's edge rule serves it, as files (`file://`) or over HTTP with its redirects |
 | `tests/e2e.sh` | the end-to-end exercise with the real packages and grassfield's client, in a throwaway container |
 | `tests/smoke.sh` | CI's test job: a fresh machine installs a built tree and the client answers |
-| `.github/workflows/` | `build` (on demand: build, test; publish written and disabled), `poll` (every 15 minutes, off until the owner turns it on), `watch-hyprland` (by hand until something is published) |
+| `tests/newest-release.sh` | the publisher's choice of release, against pacman's vercmp |
+| `.github/workflows/` | `build` (on demand: build with a throwaway key, test), `publish` (the one serialized publisher per channel: the latest state, from the current snapshot, a conditional pointer write; written and disabled), `poll` (every 15 minutes, off until the owner turns it on), `watch-hyprland` (by hand until something is published) |
 
 The tree a build writes, per channel and arch (ADR-0033 g, h.2):
 

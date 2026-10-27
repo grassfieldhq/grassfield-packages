@@ -27,9 +27,12 @@ Last updated: 2026-10-27
   - `scripts/build-channel.sh` (grassfield's own PKGBUILD, keyring built first, names and replaces checked, packages,
     databases and notes signed, `repo-add --prevent-downgrade`, immutable package names, snapshot + pointer, build record),
     `notes.py`, `check-tree.sh`, `rollback.sh`, `view.sh`, `serve.py`.
-  - `.github/workflows/`: build (workflow_dispatch: build with a throwaway key, check-tree, artifact; test: smoke.sh;
-    publish written, `if: false`), poll (every 15 min, off until `GRASSFIELD_TAG_POLL=on`), watch-hyprland (by hand only).
-    Not run: no deploy key exists, and nothing may be published.
+  - `.github/workflows/`: build (workflow_dispatch: build with a throwaway key, check-tree, artifact; test: smoke.sh),
+    publish (the one serialized publisher per channel of ADR-0033 h.2 as amended by ADR-0037 g, merged from PR #1 while
+    PR #3 was open: the latest state, built from the current snapshot with `build-channel.sh --channel`, the pointer
+    written with If-Match, started again when it moved; `if: false`), poll (every 15 min, off until
+    `GRASSFIELD_TAG_POLL=on`), watch-hyprland (by hand only). Not run: no deploy key exists, and nothing may be published.
+    `tests/newest-release.sh` (the publisher's choice of release, in a container): 9 PASS.
   - Tests (outputs in `docs/evidence/step1b-2026-10-27/`):
     - `tests/e2e.sh` with the REAL packages built three times (1.0.0, 1.0.1, 1.1.0-beta1 of grassfield's step 1 client):
       exit 0, 72 PASS, 0 FAIL (first installation per ADR-0033 b.3a, Set Up through real pkexec, updates seen with
