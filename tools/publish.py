@@ -199,18 +199,19 @@ def plan(store, current, releases, catalog, keyring_dir=None):
     if version is not None:
         order = 1 if old["release"] is None else vercmp(version, old["release"])
         if order > 0:
+            packages = sorted(f for f in os.listdir(folder) if PACKAGE_FILE.match(f))
+            # Every file the release brings, signed by a key the Store and pacman trust, before anything is read (bsdtar
+            # never sees an unverified database) or uploaded.
+            for name in list(SNAPSHOT_FILES) + [f for f in packages if not f.endswith(".sig")]:
+                problem = catalogtool.signature_problem(os.path.join(folder, name), keyring_dir)
+                if problem:
+                    raise Refused(f"release {version}: {name}: {problem}")
             if old["release"] is not None:
                 new_db, old_db = db_versions(os.path.join(folder, "grassfield.db")), db_versions(files["grassfield.db"])
                 for name, was in old_db.items():
                     if name in new_db and vercmp(new_db[name], was) < 0:
                         raise Refused(f"release {version}: grassfield.db has {name} {new_db[name]}, older than the "
                                       f"published {was} (a rollback is a new release with a higher pkgrel)")
-            packages = sorted(f for f in os.listdir(folder) if PACKAGE_FILE.match(f))
-            # Every file the release brings, signed by a key the Store and pacman trust, before anything is uploaded.
-            for name in list(SNAPSHOT_FILES) + [f for f in packages if not f.endswith(".sig")]:
-                problem = catalogtool.signature_problem(os.path.join(folder, name), keyring_dir)
-                if problem:
-                    raise Refused(f"release {version}: {name}: {problem}")
             for name in SNAPSHOT_FILES:
                 files[name], files[name + ".sig"] = os.path.join(folder, name), os.path.join(folder, name + ".sig")
             packages = [(f, os.path.join(folder, f)) for f in packages]

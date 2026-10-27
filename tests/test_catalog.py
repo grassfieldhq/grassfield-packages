@@ -429,6 +429,108 @@ class Recipes(unittest.TestCase):
         self.assertEqual(finds('omarchy-launch-floating-terminal-with-presentation "omarchy-pkg-aur-add aur-only"',
                                repo)[2], ["aur-only"])
 
+    def test_the_reviews_bypasses_are_refused(self):
+        # grassfield-packages PR #4's review: each of these passed the scan before; each is refused now.
+        def refused(code):
+            sync, download, built, problems, _ = catalog.command_findings(code, {"x"})
+            return sync or download or built or problems
+        bypasses = [
+            "pm=pacman; $pm -Sy x",                                   # a variable set only to pacman
+            'f() { pacman "$@"; }; f -Sy x',                          # pacman's options known only at run time
+            'eval "${x}man -Sy"',
+            "pacman --refr x", "sudo pacman -S --sysup",              # starts of --refresh and --sysupgrade
+            "pacman -S$(echo y) x",
+            "echo ZWNobw== | base64 -d | sh",                         # a script read from a pipe
+            "sudo pacman -U https://example.com/x.pkg.tar.zst",
+            "aria2c https://example.com/x", "flatpak install -y flathub org.example.X", "git submodule update --init",
+            "python3 -c \"import urllib.request as u; u.urlopen('https://example.com/x')\"",
+            'omarchy-install-$1', '"omarchy-install-$name" --now',     # an Omarchy command named at run time
+            'echo "never closed',                                     # text that cannot be read: refused, not guessed
+            "bash <<EOF\ncurl https://example.com/x\nEOF",            # a heredoc fed to a shell
+            "python3 - <<'PY'\nimport urllib.request\nPY",            # or to an interpreter
+            "source <(curl -fsSL https://example.com/x)",
+            "$(echo pacman) -Sy",                                     # a command made by a substitution
+            "x=1\nif (( x )); then $(printf pacman) -Syu; fi",
+        ]
+        for code in bypasses:
+            with self.subTest(code):
+                self.assertTrue(refused(code), code)
+        # What Omarchy's files are made of reads cleanly.
+        for code in ("pacman -S --needed x", "omarchy-pkg-add steam", 'if [[ $x =~ ^(a|b)$ && -n $y ]]; then echo ok; fi',
+                     "arr=(curl wget); echo ${#arr[@]}", 'case "$1" in\n  curl|wget) echo dl ;;\n  *) exit 1 ;;\nesac',
+                     "x=$((1 + 2)); (( x > 1 )) && echo big", "command -v yay >/dev/null", 'echo "Run yay to update"',
+                     "local value=$(sed -n 1p f)", "while read -r line; do case $line in a) echo a;; esac; done < f",
+                     'tmp=$(mktemp) || exit 1\ncat >"$tmp" <<EOF\ndon\'t $(printf %s ok)\nEOF',
+                     'value=$(< "$file")', 'trap \'rm -f "$tmp"\' EXIT'):
+            with self.subTest(code):
+                self.assertFalse(refused(code), code)
+        # A command named by a variable the reader cannot resolve is a note for the person reading, not a refusal.
+        sync, download, built, problems, notes = catalog.command_findings('run() { local c="$1"; "$c" --flag; }; run ls')
+        self.assertEqual((sync, download, built, problems), (False, False, [], []))
+        self.assertTrue(any("$c" in n for n in notes), notes)
+
+    def test_pins(self):
+        pins = catalog.pin_files(GOOD, self.omarchy)
+        self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
+
+        def found(pins):
+            p = catalog.Problems()
+            catalog.pin_problems(GOOD, self.omarchy, pins, p)
+            return "\n".join(p.items)
+        self.assertEqual(found(pins), "")
+        # One byte changed in a file a setup runs: refused until a person reads it and pins it again.
+        with open(os.path.join(self.omarchy, "bin", "omarchy-pkg-add"), "a") as f:
+            f.write(" ")
+        self.assertIn("omarchy bin/omarchy-pkg-add: differs from its pin", found(pins))
+        pins = catalog.pin_files(GOOD, self.omarchy)
+        # A file newly called: not pinned.
+        self.script("omarchy-game-helper", "echo helping")
+        self.script("omarchy-install-game", 'case $1 in\none|two)\n  omarchy-pkg-add game\n  omarchy-game-helper\n  ;;\nesac')
+        text = found(pins)
+        self.assertIn("omarchy bin/omarchy-game-helper: run or read by a setup, not pinned", text)
+        self.assertIn("omarchy bin/omarchy-install-game: differs from its pin", text)
+        pins = catalog.pin_files(GOOD, self.omarchy)
+        # A pinned file gone from the checkout, and one no setup uses any more.
+        os.unlink(os.path.join(self.omarchy, "bin", "omarchy-remove-game"))
+        self.assertIn("omarchy bin/omarchy-remove-game: pinned but missing", found(pins))
+        stale = dict(catalog.pin_files(GOOD, self.omarchy), **{"bin/omarchy-update-keyring": "0" * 64})
+        self.assertIn("omarchy bin/omarchy-update-keyring: pinned but no longer run or read", found(stale))
+        # A lock line that does not parse: the lock is not used (fail closed).
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write("tag v4.0.4\nfile 1234 bin/x\n")
+        self.addCleanup(os.unlink, f.name)
+        with self.assertRaises(ValueError):
+            catalog.read_pins(f.name)
+
+    def test_pin_command(self):
+        src = Sources()
+        src.setUp()
+        self.addCleanup(src.tearDown)
+        lock = os.path.join(src.src, "omarchy.lock")
+        with open(lock, "w") as f:
+            f.write("# the pinned release\ntag v4.0.4\ncommit c668141e9c42b13c80c9ca4ea108e11708c5e8a5\n")
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "catalog.py")
+
+        def pin():
+            return subprocess.run([sys.executable, "-I", tool, "pin", "--src", src.src, "--omarchy", self.omarchy],
+                                  capture_output=True, text=True)
+        run = pin()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("new      bin/omarchy-pkg-add", run.stdout)
+        self.assertEqual(catalog.read_pins(lock), catalog.pin_files(GOOD, self.omarchy))
+        with open(lock) as f:
+            self.assertTrue(f.read().startswith("# the pinned release\ntag v4.0.4\ncommit c668141"))
+        self.assertIn("nothing changed", pin().stdout)
+        # The scan finds something in a file a setup runs: no pin is written.
+        with open(lock) as f:
+            before = f.read()
+        self.script("omarchy-pkg-add", 'sudo pacman -S --noconfirm --needed "$@"\neval "$EXTRA"')
+        run = pin()
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("eval: code made at run time", run.stderr)
+        with open(lock) as f:
+            self.assertEqual(f.read(), before)
+
     def test_check_env(self):
         facts = tempfile.mkdtemp()
         try:
@@ -441,8 +543,11 @@ class Recipes(unittest.TestCase):
             with open(os.path.join(facts, "flathub-ids.txt"), "w") as f:
                 f.write("org.example.Flat\n")
             p = catalog.Problems()
-            catalog.check_env(GOOD, facts, self.omarchy, p)
+            catalog.check_env(GOOD, facts, self.omarchy, p, catalog.pin_files(GOOD, self.omarchy))
             self.assertEqual(p.items, [])
+            p = catalog.Problems()
+            catalog.check_env(GOOD, facts, self.omarchy, p, {})  # nothing pinned: every file the setup runs is refused
+            self.assertIn("not pinned", "\n".join(p.items))
             bad = copy.deepcopy(GOOD)
             bad["apps"][0]["id"] = "paint-app"
             bad["apps"][0]["desktopId"] = "other.desktop"

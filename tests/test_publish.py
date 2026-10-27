@@ -110,6 +110,8 @@ class Publisher(unittest.TestCase):
         first, _ = self.run_once()
         cases = {
             "a garbage .sig": ("grassfield.db.sig", b"not a signature\n", "grassfield.db: bad or missing signature"),
+            # Unsigned bytes in place of the database: refused by its signature before bsdtar ever reads it.
+            "an unverified database": ("grassfield.db", b"not a database\n", "grassfield.db: bad or missing signature"),
             "a package without .sig": ("grassfield-icons-1.0.1-1-x86_64.pkg.tar.zst.sig", None,
                                        "grassfield-icons-1.0.1-1-x86_64.pkg.tar.zst: missing, or its .sig is"),
         }
