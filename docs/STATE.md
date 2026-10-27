@@ -173,11 +173,30 @@ Last updated: 2026-10-27
      names the lock's commit.
   5. The comment says what the scan does with a command named by a variable: resolved, or listed, not refused.
   The pin step on v4.0.4 in a throwaway container: `nothing changed` (the same 43 files), 7 notes to read.
+- 2026-10-27, Grassfield Store step 2 (this repository's half, branch `claude/pensive-thompson-fhk5um` restarted from main
+  b0e8494; grassfield's half is the Store's UI):
+  - The catalog: four sections after Discover (`create` 20, `work` 30, `play` 40, `develop` 50), each with a hero, cards
+    and rows in our own words, English and French; ten apps from [extra] (darktable, Rnote, KeePassXC, Signal, Foliate,
+    0 A.D., SuperTuxKart, Godot, Meld, DBeaver), each with its categories. No icon, no publisher's text.
+  - The two gaps of PR #5's merge comment, in the scan behind the pins:
+    1. A file run by a shell (`bash "$OMARCHY_PATH/install/missing.sh"`, `sh -e "$OMARCHY_PATH/$h/run.sh"`) or by its
+       path (`"$OMARCHY_PATH/install/x.sh"`, a path made at run time) is refused unless the closure pinned it; a shell's
+       options are read (`-ec TEXT` is read as text, `-o pipefail FILE` runs FILE, `-s` and `-` read the input).
+    2. An argument that names a package manager or a downloader, literally or through a variable set only to literal text,
+       is refused when the command it is handed to is not one the scan knows (`firejail`, `strace`, `bwrap`, `parallel`,
+       `systemd-inhibit`...); commands that take a name as data (`echo`, `pgrep`, `chmod`, Omarchy's package helpers) are
+       listed. A plain variable as pacman's argument (`"$pkg"`, which could be `-y`) is a note for the person reading.
+  - Evidence: the pin step on v4.0.4 (c668141) in a copy of `catalog/`: `nothing changed`, exit 0, the lock byte for byte
+    the same, 10 notes (the 7 before and three `pacman -Q "$pkg"` in `omarchy-pkg-add`, `omarchy-pkg-aur-add` and
+    `omarchy-pkg-missing`, queries over `for pkg in "$@"`).
 - Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
 
 ## Tests run
+- Store step 2: `tests/run-in-container.sh --network host`: `Ran 54 tests … OK`, exit 0. The CI check job replayed in a
+  throwaway container: docker exit 0 (`validate: ok`; 15831 packages, 51 entries and 1604 AppStream components gathered;
+  `check-env: ok`; both channels built, signed with a throwaway key and verified; no temporary GnuPG home left).
 - Software Update step 1b: see its entry above (unit tests, release-build, the end-to-end, the CI path with keyring/ as
   after O11, GitHub's `check` job).
 - Store step 1 follow-up: `tests/run-in-container.sh --network host`: `Ran 46 tests … OK`, exit 0, nothing skipped (47 with
@@ -215,4 +234,5 @@ Last updated: 2026-10-27
 - Software Update step 1b (ADR-0033): the integrator's re-review of PR #3 (the counter-review's fixes, the unification and
   the merge of #4); then grassfield's one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21);
   step 2 (the pane) in grassfield after its Settings PRs #8-#10.
-- The Store's later steps add to the catalog (more sections, icons for apps without metadata after the legal review).
+- Store step 2: the integrator's review of this branch's PR (with grassfield's step 2 PR).
+- The Store's later steps add to the catalog (icons for apps without metadata after the legal review).

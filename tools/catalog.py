@@ -128,6 +128,15 @@ DOWNLOADERS = {"curl", "wget", "aria2c", "axel", "rsync", "scp", "sftp", "lftp",
                "mise", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "pipx", "pip", "pip3", "cargo", "rustup", "uv",
                "uvx", "go", "gem"}
 GIT_FETCH = {"clone", "pull", "fetch", "submodule"}
+# What an argument may not name, through a command the scan does not know (firejail, strace, bwrap, parallel...): it
+# could run it, with options the scan cannot see.
+RUN_THROUGH = PACKAGE_MANAGERS | DOWNLOADERS | {"git"}
+# Commands that take a command or a package name as data and never run it; Omarchy's package helpers are read in the
+# closure, where what they do with the names is judged.
+NAMES_AS_DATA = {"echo", "printf", "which", "type", "hash", "whereis", "pgrep", "pidof", "pkill", "killall", "chmod",
+                 "chown", "ln", "rm", "cp", "mv", "mkdir", "touch", "cat", "grep", "notify-send", "omarchy-cmd-present",
+                 "omarchy-cmd-missing", "omarchy-pkg-add", "omarchy-pkg-drop", "omarchy-pkg-missing",
+                 "omarchy-pkg-present", "omarchy-pkg-aur-add", "omarchy-pkg-aur-accessible"}
 # What mise does without fetching anything (where, ls, rm...); every other mise command may install.
 MISE_LOCAL = {"where", "ls", "list", "current", "which", "rm", "remove", "uninstall", "unuse", "activate", "version",
               "--version"}
@@ -885,6 +894,9 @@ def read_command(words, literals, problems, notes, depth):
     m = OMARCHY_FILE.match(cmd)
     if m and m.group(1).startswith("bin/"):
         cmd = os.path.basename(m.group(1))  # "$OMARCHY_PATH/bin/omarchy-x": that command
+    elif m:
+        out.append(words)  # "$OMARCHY_PATH/install/x.sh": a file of Omarchy's, judged against the pins (outside_closure)
+        return out
     if PLACEHOLDER in cmd:
         problems.append("a command made at run time by a substitution")
         return out
@@ -898,18 +910,23 @@ def read_command(words, literals, problems, notes, depth):
                 out += read_command([value] + words[1:], literals, problems, notes, depth)
         else:
             notes.append(f"a command named at run time ({cmd}): read what it can be")
+            out.append(words)  # a path made at run time names a file outside the pins (outside_closure)
         return out
     words = [os.path.basename(cmd)] + words[1:]
     base, args = words[0], words[1:]
+    if base not in RUN_THROUGH | NAMES_AS_DATA | TERMINAL_RUNNERS | {"gum", "trap", "eval"} and \
+            not base.startswith("omarchy-launch-"):
+        for arg in args:
+            values = run_time_name(arg, literals) if "$" in arg else {arg}
+            for value in sorted(v for v in values or () if os.path.basename(v) in RUN_THROUGH):
+                problems.append(f"{base} is handed {value} ({arg}): a package manager or downloader it may run")
     if base == "eval":
         problems.append("eval: code made at run time")
     elif base in SHELLS:
-        script = [a for a in args if not a.startswith("-")]
-        if "-c" in args:
-            i = args.index("-c")
-            if i + 1 < len(args):
-                out += simple_commands(args[i + 1], problems, notes, depth + 1)
-        elif not script or "-s" in args or PLACEHOLDER in script[0]:
+        how, operand = shell_operand(args)
+        if how == "c" and operand is not None:
+            out += simple_commands(operand, problems, notes, depth + 1)
+        elif how == "input" or (how == "file" and PLACEHOLDER in operand):
             problems.append(f"{base} runs a script from its input or a substitution (a pipe, a redirection, <(...))")
     elif base in INTERPRETERS:
         for flag in ("-c", "-e"):
@@ -933,6 +950,33 @@ def read_command(words, literals, problems, notes, depth):
             out += read_command(command, literals, problems, notes, depth + 1)
     out.append(words)
     return out
+
+
+def shell_operand(args):
+    """How a shell runs its code: ("c", the command text after -c, or None), ("file", the script it runs) or
+    ("input", None) when it reads it from its input (-s, "-", or no operand)."""
+    text, i = False, 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if a in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            i += 2
+        elif a.startswith("--"):
+            i += 1
+        elif a[:1] in ("-", "+") and len(a) > 1:
+            if "s" in a[1:]:
+                return "input", None
+            text = text or "c" in a[1:]
+            i += 1
+        else:
+            break
+    if i >= len(args):
+        return ("c", None) if text else ("input", None)
+    if text:
+        return "c", args[i]
+    return ("input", None) if args[i] == "-" else ("file", args[i])
 
 
 def aur_names(names, repo):
@@ -968,6 +1012,9 @@ def command_findings(code, repo=None):
                 problems.append(f"{cmd}'s arguments made by a substitution: they could be options")
             elif any("[@]" in a or "[*]" in a or a in ("$@", "$*") for a in run_time):
                 notes.append(f"{cmd}'s arguments from an array or the script's own arguments: read what they can be")
+            for a in run_time:
+                if re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", a):
+                    notes.append(f"{cmd}'s argument from a variable ({a}): it could be an option (-y); read what it holds")
             if (ops and ops[0].startswith("-U")) or any(abbreviates(a, "upgrade") for a in args):
                 problems.append(f"{cmd} -U: a package file from outside the repositories")
         if cmd in AUR_HELPERS:
@@ -991,16 +1038,24 @@ def command_findings(code, repo=None):
 
 
 def outside_closure(code, pinned):
-    """An Omarchy command, or a sourced file, that the closure did not follow (so neither pinned nor scanned)."""
+    """An Omarchy command, or a file sourced or run, that the closure did not follow (so neither pinned nor scanned)."""
+    def is_pinned(word):
+        m = OMARCHY_FILE.match(word)
+        return m is not None and m.group(1) in pinned
+
     found = []
     for words in simple_commands(code, [], []):
         cmd, args = words[0], words[1:]
         if cmd.startswith("omarchy-") and f"bin/{cmd}" not in pinned:
             found.append(f"an Omarchy command outside the pinned files ({cmd})")
-        if cmd in ("source", ".") and args:
-            m = OMARCHY_FILE.match(args[0])
-            if not m or m.group(1) not in pinned:
-                found.append(f"sources a file outside the pinned files ({args[0]})")
+        if cmd in ("source", ".") and args and not is_pinned(args[0]):
+            found.append(f"sources a file outside the pinned files ({args[0]})")
+        if cmd in SHELLS:
+            how, script = shell_operand(args)
+            if how == "file" and PLACEHOLDER not in script and not is_pinned(script):
+                found.append(f"{cmd} runs a script outside the pinned files ({script})")
+        if "/" in cmd and not is_pinned(cmd):  # a path made at run time, or a file of Omarchy's the closure lacks
+            found.append(f"runs a file outside the pinned files ({cmd})")
     return found
 
 

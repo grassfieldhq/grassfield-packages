@@ -1,0 +1,80 @@
+{
+  "order": 50,
+  "id": "develop",
+  "title": {
+    "en": "Develop",
+    "fr": "Développer"
+  },
+  "symbol": "develop",
+  "blocks": [
+    {
+      "kind": "hero",
+      "items": [
+        {
+          "app": "dev.zed.Zed",
+          "eyebrow": {
+            "en": "Code editor",
+            "fr": "Éditeur de code"
+          },
+          "title": {
+            "en": "Write code at full speed",
+            "fr": "Écrivez du code à pleine vitesse"
+          },
+          "text": {
+            "en": "A fast editor for programmers, with language servers built in.",
+            "fr": "Un éditeur rapide pour les programmeurs, avec les serveurs de langage intégrés."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "cards",
+      "items": [
+        {
+          "app": "org.godotengine.Godot",
+          "eyebrow": {
+            "en": "Game engine",
+            "fr": "Moteur de jeu"
+          },
+          "title": {
+            "en": "Make your own games",
+            "fr": "Créez vos propres jeux"
+          },
+          "text": {
+            "en": "Scenes, scripts and physics, for 2D and 3D games.",
+            "fr": "Scènes, scripts et physique, pour des jeux 2D et 3D."
+          }
+        },
+        {
+          "app": "org.gnome.Meld.desktop",
+          "eyebrow": {
+            "en": "Compare",
+            "fr": "Comparer"
+          },
+          "title": {
+            "en": "See what changed",
+            "fr": "Voyez ce qui a changé"
+          },
+          "text": {
+            "en": "Compare files and folders side by side, then merge them.",
+            "fr": "Comparez fichiers et dossiers côte à côte, puis fusionnez-les."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {
+        "en": "Editors and tools",
+        "fr": "Éditeurs et outils"
+      },
+      "apps": [
+        "dev.zed.Zed",
+        "com.visualstudio.code",
+        "org.godotengine.Godot",
+        "org.gnome.Meld.desktop",
+        "io.dbeaver.DBeaver"
+      ]
+    }
+  ]
+}
