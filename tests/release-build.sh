@@ -99,7 +99,7 @@ expect "... and check-tree.sh --trusted --keyring-src: K2 trusted by the keyring
 
 echo "== tools/publish.py publishes the signed release build"
 store=/w/store
-out=$(python3 -I /p/tools/publish.py --store "$store" --channel stable --releases /w/tree/releases/stable 2>&1); rc=$?
+out=$(python3 -I /p/tools/publish.py --store "$store" --channel stable --releases /w/tree/releases/stable --keyring-dir /w/kr-k2 2>&1); rc=$?
 expect "tools/publish.py --releases -> exit 0 ($out)" test "$rc" == 0
 id=$(python3 -I /p/scripts/snapshot.py current "$store/stable/x86_64")
 expect "its pointer {\"snapshot\": \"$id\"} and manifest (release 1.0.1-3, 6 files)" \

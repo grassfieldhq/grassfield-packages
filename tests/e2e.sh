@@ -263,7 +263,7 @@ printf '{"snapshot": "%s"}\n' "$older" >"$W/tree/stable/x86_64/pointer"
 pacman -Sy >"$W/back.log" 2>&1; rc=$?
 expect "the pointer moved back to the older snapshot: pacman -Sy fails for this client ($(grep -m1 '^error:' "$W/back.log"))" test "$rc" == 1
 cp "$W/pointer.newer" "$W/tree/stable/x86_64/pointer"
-rb() { "$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --to "$@"; }   # no key: the older files keep their signatures
+rb() { "$P/scripts/rollback.sh" --tree "$W/tree" --channel stable --keyring-dir "$W/keyring" --to "$@"; }   # no key: the files keep their signatures
 out=$(rb "$newer" 2>&1); rc=$?
 expect "rollback.sh --to the current snapshot -> refused, exit 1 ($out)" test "$rc" == 1
 out=$(rb 20991231T000000Z-000000000000 2>&1); rc=$?

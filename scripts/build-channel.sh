@@ -195,9 +195,16 @@ release_build() { # channel -> releases/<channel>/<packages version>/, a databas
   echo "$c: release build $full ($(python3 -I -c 'import json, sys; print(" ".join(r["version"] for r in json.load(open(sys.argv[1]))["releases"]))' "$out/grassfield-notes.json") in its notes)"
 }
 
+# The publisher checks every release file against a keyring folder: for this tree, the key that signed it (a throwaway
+# one; the real publisher checks against grassfield-keyring's files, the project's key).
+treekeys=$(mktemp -d)
+gpg --homedir "$gnupghome" --batch --no-tty --export "$key" >"$treekeys/grassfield.gpg" 2>>"$log"
+printf '%s:4:\n' "$key" >"$treekeys/grassfield-trusted"
+: >"$treekeys/grassfield-revoked"
 publish() { # channel: the channel's one publisher on this tree (tools/publish.py, ADR-0037 g), from its release builds
   local c=$1 out rc=0
-  out=$(python3 -I "$here/tools/publish.py" --store "$tree" --channel "$c" --releases "$tree/releases/$c" 2>&1) || rc=$?
+  out=$(python3 -I "$here/tools/publish.py" --store "$tree" --channel "$c" --releases "$tree/releases/$c" \
+    --keyring-dir "$treekeys" 2>&1) || rc=$?
   printf '%s\n' "$out" | sed "s/^/$c: /"
   ((rc == 0)) || die "$c: tools/publish.py exit $rc"
   [[ $out =~ snapshot\ ([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})\ \( ]] && updated+=("$c:${BASH_REMATCH[1]}")

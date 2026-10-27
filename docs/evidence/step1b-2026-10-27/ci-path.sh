@@ -66,7 +66,7 @@ publish() { # rc: tools/publish.py on the release builds kept so far
   local out r_
   mkdir -p /kept/all
   cp -r "$kept/$1"/releases/beta/* /kept/all/
-  out=$(python3 -I /pk/tools/publish.py --store "$store" --channel beta --releases /kept/all 2>&1); r_=$?
+  out=$(python3 -I /pk/tools/publish.py --store "$store" --channel beta --releases /kept/all --keyring-dir /pk/keyring 2>&1); r_=$?
   expect "$1: tools/publish.py -> exit 0 ($out)" test "$r_" == 0
   expect "$1: the published channel follows the contract (check-tree.sh --trusted --keyring-src)" \
     /pk/scripts/check-tree.sh --tree "$store" --trusted --keyring-src /pk/keyring
@@ -92,7 +92,7 @@ say "v1.0.0-rc2: counter-case first (signed without the published keyring), then
 mkdir -p /counter && cp -r "$store" /counter/store
 release_job rc2 --no-published
 mkdir -p /counter/releases && cp -r "$kept/rc2"/releases/beta/* /counter/releases/
-out=$(python3 -I /pk/tools/publish.py --store /counter/store --channel beta --releases /counter/releases 2>&1); r_=$?
+out=$(python3 -I /pk/tools/publish.py --store /counter/store --channel beta --releases /counter/releases --keyring-dir /pk/keyring 2>&1); r_=$?
 expect "counter-case: tools/publish.py refuses it, exit 1 ($out)" test "$r_" == 1
 rm -rf "$kept/rc2"
 release_job rc2
@@ -106,7 +106,7 @@ expect "the checker: 1.0.0rc1-3 -> 1.0.0rc2-3 offered; notes over https only, so
 pacman -Syu --noconfirm >>/tmp/client.log 2>&1; r_=$?
 expect "pacman -Syu -> exit 0, installs 1.0.0rc2-3, all three together" \
   test "$r_:$(pacman -Q grassfield-desktop grassfield-compositor grassfield-icons | awk '{print $2}' | sort -u)" == "0:1.0.0rc2-3"
-out=$(python3 -I /pk/tools/publish.py --store "$store" --channel beta --releases /kept/all 2>&1)
+out=$(python3 -I /pk/tools/publish.py --store "$store" --channel beta --releases /kept/all --keyring-dir /pk/keyring 2>&1)
 expect "the publisher again, nothing new: nothing written ($out)" grep -q 'nothing new' <<<"$out"
 echo "done: $checks checks, $fails failure(s)"
 ((fails == 0))
