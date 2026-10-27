@@ -97,7 +97,7 @@ class Rules(unittest.TestCase):
         self.broken(lambda o: o["sections"][0].update(title={"en": "x" * 41}), "longer than 40")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(title={"en": "a\nb"}),
                     "control or bidirectional character U+000A")
-        self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": "evil‮txt"}),
+        self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": "evil\u202etxt"}),
                     "U+202E")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": " padded"}),
                     "space at an end")
@@ -135,7 +135,7 @@ class Rules(unittest.TestCase):
 
     def test_webapp_name(self):
         self.assertIsNone(catalog.webapp_name_problem("Example Mail"))
-        for bad in ("", ".hidden", "a/b", "x" * 65, "tab\there", "rtl‮"):
+        for bad in ("", ".hidden", "a/b", "x" * 65, "tab\there", "rtl\u202e"):
             self.assertIsNotNone(catalog.webapp_name_problem(bad), bad)
 
 

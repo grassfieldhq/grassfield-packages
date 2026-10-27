@@ -58,7 +58,7 @@ FINGERPRINT = re.compile(r"^[0-9A-F]{40}$")
 # Lengths in code points (ADR-0037 g).
 LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 80, 200, 4000
 # Bidirectional formatting characters: plain text never needs them, and they can make a text read other than it is.
-BIDI = set("؜‎‏‪‫‬‭‮⁦⁧⁨⁩")
+BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
 # Recipes: what the catalog may not name (ADR-0037 a and e.4). A sync makes the next install a partial upgrade (S12);
 # a download runs code pacman never checked (the setups Omarchy marks as such: GeForce NOW, Battle.net, dev-env).
