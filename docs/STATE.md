@@ -14,7 +14,14 @@ Last updated: 2026-10-27
   - `.github/workflows/`: build (workflow_dispatch: build with a throwaway key, check-tree, artifact; test: smoke.sh;
     publish written, `if: false`), poll (every 15 min, off until `GRASSFIELD_TAG_POLL=on`), watch-hyprland (by hand only).
     Not run: no deploy key exists, and nothing may be published.
-  - Tests: `tests/e2e.sh` (see the PR for its run), `tests/smoke.sh` (CI's test job).
+  - Tests (outputs in `docs/evidence/step1b-2026-10-27/`):
+    - `tests/e2e.sh` with the REAL packages built three times (1.0.0, 1.0.1, 1.1.0-beta1 of grassfield's step 1 client):
+      exit 0, 72 PASS, 0 FAIL (first installation per ADR-0033 b.3a, Set Up through real pkexec, updates seen with
+      verified notes and installed, rogue database, packages and notes refused, beta and back without a downgrade,
+      rollback over HTTP by a new snapshot, removal, the keyless keyring trusting nothing);
+    - the build job's script and `tests/smoke.sh` (the CI path, run locally): build exit 0, check-tree 0 failures, smoke
+      0 failures; a ref without release notes is refused.
+  - The first clean builds found two gaps in grassfield's PKGBUILD makedepends, fixed in grassfield #16 (8509be8, 0338116).
 
 ## Open
 - From the owner, later: `GRASSFIELD_DEPLOY_KEY`, then `GRASSFIELD_TAG_POLL=on`; the `release` environment and its
@@ -24,5 +31,6 @@ Last updated: 2026-10-27
 - PR #1 (the Store catalog) edits README, CLAUDE.md and this file too: whichever merges second merges the other.
 
 ## Next
-- The integrator's review (opus for signing, keyring and CI) of this PR and of grassfield #16.
+- The integrator's review (opus for signing, keyring and CI) of this PR. grassfield #16 (the client) is merged.
+- After this PR: grassfield's one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21).
 - Step 2 (the pane) in grassfield after its Settings PRs #8-#10.

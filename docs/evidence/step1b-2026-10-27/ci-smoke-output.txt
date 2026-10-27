@@ -1,0 +1,27 @@
+PASS: no symbolic link in the tree
+PASS: beta 20261027T074209Z-c88e6e422fef: grassfield.db signed
+PASS: beta 20261027T074209Z-c88e6e422fef: grassfield.files signed
+PASS: beta 20261027T074209Z-c88e6e422fef: grassfield-notes.json signed
+PASS: beta: grassfield-compositor-1.0.0rc1-3-x86_64.pkg.tar.zst signed
+PASS: beta: grassfield-desktop-1.0.0rc1-3-x86_64.pkg.tar.zst signed
+PASS: beta: grassfield-icons-1.0.0rc1-3-any.pkg.tar.zst signed
+PASS: beta: grassfield-keyring-20261027-1-any.pkg.tar.zst signed
+PASS: beta: every package is named grassfield-*
+PASS: beta: no package declares replaces=
+PASS: beta: notes valid, newest release 1.0.0rc1-3
+check-tree: 0 failure(s)
+PASS: the tree follows the contract (check-tree.sh)
+grassfield-desktop 1.0.0rc1-3
+grassfield-compositor 1.0.0rc1-3
+grassfield-icons 1.0.0rc1-3
+grassfield-keyring 20261027-1
+PASS: pacman -S grassfield-desktop, -compositor, -icons and -keyring from the beta channel (signatures required)
+   grassfield-desktop 1.0.0rc1-3
+   grassfield-compositor 1.0.0rc1-3
+   grassfield-icons 1.0.0rc1-3
+   grassfield-keyring 20261027-1
+PASS: grassfield-update-check as a user: up-to-date (up-to-date custom)
+PASS: grassfield-channel-set reads the channel (custom: the Server is this test's, not the build's base)
+PASS: a build that pins no key yet (O11): grassfield-channel-set stable refuses ('grassfield-channel-set: no signing key in this build')
+PASS: pacman -Rns: no [grassfield] line, no /etc/pacman.d/grassfield.conf, pacman works
+smoke: 0 failure(s)

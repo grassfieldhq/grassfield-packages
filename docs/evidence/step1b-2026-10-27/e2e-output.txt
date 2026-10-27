@@ -1,0 +1,150 @@
+
+== an Omarchy stable machine (build/pacman.conf) with the tools of this test
+pacman 7.1.0.r9.g54d9411-3 gnupg 2.4.9-3 polkit 128-1 git 2.56.0-1 python 3.14.8-1 
+
+== throwaway keys
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-10-28
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-10-28
+K FE9284DA9673B5F79900FDC1F07282BEDBD6699E
+KR 5B235E54ED91A32D2DF53B1986C0069A542171C1
+
+== the test keyring (keyring/ of this repository with K) and the scratch releases of grassfield
+releases: 1.0.0 1755f8cb921b402d780ba0bf471626fd5ca8a081, 1.0.1 3185aaebc62777383be71c933f924737b469d241, 1.1.0-beta1 7c2c5e5c65919aff1663db7ac7f4ee73d6ac51b3 (pkgrel 3)
+
+== build 1.0.0 (the real PKGBUILD, Omarchy stable's package set)
+PASS: build-channel.sh 1.0.0 -> exit 0 (961 s)
+   commit 1755f8cb921b402d780ba0bf471626fd5ca8a081, VERSION 1.0.0, packages 1.0.0-3, channels stable beta
+   trust anchor: FE9284DA9673B5F79900FDC1F07282BEDBD6699E is in grassfield-keyring
+   stable: snapshot 20261027T074050Z-1755f8cb921b (grassfield-desktop 1.0.0-3)
+   beta: snapshot 20261027T074052Z-1755f8cb921b (grassfield-desktop 1.0.0-3)
+   done: stable:20261027T074050Z-1755f8cb921b beta:20261027T074052Z-1755f8cb921b
+   ref 1755f8cb921b402d780ba0bf471626fd5ca8a081
+   commit 1755f8cb921b402d780ba0bf471626fd5ca8a081
+   version 1.0.0
+   packages 1.0.0-3
+   snapshots stable:20261027T074050Z-1755f8cb921b beta:20261027T074052Z-1755f8cb921b
+   signing-key FE9284DA9673B5F79900FDC1F07282BEDBD6699E
+   hyprland 0.56.2-4
+   plugin-abi efb50993780079460b0cbed1363e2166a2de1d9f_aq_0.15_hu_0.14_hg_0.5_hc_0.1_hlg_0.6
+   package-set:
+PASS: no symbolic link in the tree
+PASS: stable 20261027T074050Z-1755f8cb921b: grassfield.db signed
+PASS: stable 20261027T074050Z-1755f8cb921b: grassfield.files signed
+PASS: stable 20261027T074050Z-1755f8cb921b: grassfield-notes.json signed
+PASS: stable: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed
+PASS: stable: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed
+PASS: stable: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed
+PASS: stable: grassfield-keyring-20261027-1-any.pkg.tar.zst signed
+PASS: stable: every package is named grassfield-*
+PASS: stable: no package declares replaces=
+PASS: stable: notes valid, newest release 1.0.0-3
+PASS: beta 20261027T074052Z-1755f8cb921b: grassfield.db signed
+PASS: beta 20261027T074052Z-1755f8cb921b: grassfield.files signed
+PASS: beta 20261027T074052Z-1755f8cb921b: grassfield-notes.json signed
+PASS: beta: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed
+PASS: beta: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed
+PASS: beta: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed
+PASS: beta: grassfield-keyring-20261027-1-any.pkg.tar.zst signed
+PASS: beta: every package is named grassfield-*
+PASS: beta: no package declares replaces=
+PASS: beta: notes valid, newest release 1.0.0-3
+check-tree: 0 failure(s)
+PASS: the tree follows the contract (check-tree.sh)
+
+== the user's machine: the first installation (ADR-0033 b.3a), then Set Up through pkexec
+PASS: pacman -S from the repository installs grassfield-desktop 1.0.0-3 and grassfield-keyring
+PASS: alice: grassfield-channel-set stable -> exit 0 (b.3a step 5: template, keyring populated, hook linked)
+PASS: the channel is stable; the checker: up-to-date
+
+== A10 1.0.1 published: refused with a rogue signature, seen with its notes, installed
+PASS: build-channel.sh 1.0.1 -> exit 0
+PASS: a database signed by the rogue key -> pacman -Sy exit 1 (error: grassfield: key "5B235E54ED91A32D2DF53B1986C0069A542171C1" is unknown)
+PASS: ... and the checker answers failed (its [grassfield]-only sync), no crash
+PASS: notes signed by the rogue key: the update is offered without notes
+PASS: packages signed by the rogue key (database signed by K) -> pacman -Syu exit 1, still 1.0.0-3 (error: grassfield: key "5B235E54ED91A32D2DF53B1986C0069A542171C1" is unknown)
+PASS: the checker sees Grassfield 1.0.0 -> 1.0.1 with verified notes
+   notes: [{'version': '1.0.1-3', 'date': '2026-10-27', 'notes': {'en': 'Grassfield 1.0.1: what changed.\nSecond line.', 'fr': 'Grassfield 1.0.1 : ce qui a changé.'}}]
+PASS: pacman -Syu installs 1.0.1 (grassfield-desktop, -compositor and -icons together)
+PASS: the checker: up-to-date
+
+== A10 beta, then back to stable without a downgrade
+PASS: build-channel.sh 1.1.0-beta1 -> exit 0, beta only
+PASS: on stable the checker still says up-to-date
+gpg: next trustdb check due at 2026-10-28
+PASS: grassfield-channel-set beta -> exit 0
+PASS: the checker: 1.1.0beta1 available on beta, with its notes
+PASS: pacman -Syu installs 1.1.0beta1
+gpg: next trustdb check due at 2026-10-28
+PASS: grassfield-channel-set stable -> exit 0
+PASS: back on stable: the checker offers nothing
+PASS: pacman -Syu keeps 1.1.0beta1 ('is newer than grassfield')
+
+== A7i a rollback over HTTP (the edge rule of scripts/serve.py)
+:: Synchronizing package databases...
+ core downloading...
+ extra downloading...
+ multilib downloading...
+ grassfield downloading...
+PASS: pacman -Sy over the redirects of the current snapshot (1.0.1)
+PASS: the pointer moved back to the older snapshot: pacman -Sy fails for this client (error: grassfield: signature from "Grassfield e2e k (throwaway) <k@grassfield.invalid>" is invalid)
+PASS: rollback.sh: a new snapshot with the older packages (stable: snapshot 20261027T080337Z-1755f8cb921b, the packages of 20261027T074050Z-1755f8cb921b)
+error: grassfield: signature from "Grassfield e2e k (throwaway) <k@grassfield.invalid>" is invalid
+:: Synchronizing package databases...
+ core downloading...
+ extra downloading...
+ multilib downloading...
+ grassfield downloading...
+PASS: ... pacman -Sy works
+PASS: ... and pacman -Syu downgrades nothing
+   serve.py: "GET /stable/x86_64/grassfield.db HTTP/1.1" 302 -
+   serve.py: "GET /stable/x86_64/grassfield.db HTTP/1.1" 302 -
+   serve.py: "GET /stable/x86_64/snap/20261027T074050Z-1755f8cb921b/grassfield.db HTTP/1.0" 304 -
+   serve.py: "GET /stable/x86_64/grassfield.db HTTP/1.1" 302 -
+PASS: no symbolic link in the tree
+PASS: stable 20261027T080337Z-1755f8cb921b: grassfield.db signed
+PASS: stable 20261027T080337Z-1755f8cb921b: grassfield.files signed
+PASS: stable 20261027T080337Z-1755f8cb921b: grassfield-notes.json signed
+PASS: stable: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed
+PASS: stable: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed
+PASS: stable: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed
+PASS: stable: grassfield-keyring-20261027-1-any.pkg.tar.zst signed
+PASS: stable: every package is named grassfield-*
+PASS: stable: no package declares replaces=
+PASS: stable: notes valid, newest release 1.0.0-3
+PASS: beta 20261027T080315Z-7c2c5e5c6591: grassfield.db signed
+PASS: beta 20261027T080315Z-7c2c5e5c6591: grassfield.files signed
+PASS: beta 20261027T080315Z-7c2c5e5c6591: grassfield-notes.json signed
+PASS: beta: grassfield-compositor-1.1.0beta1-3-x86_64.pkg.tar.zst signed
+PASS: beta: grassfield-desktop-1.1.0beta1-3-x86_64.pkg.tar.zst signed
+PASS: beta: grassfield-icons-1.1.0beta1-3-any.pkg.tar.zst signed
+PASS: beta: grassfield-keyring-20261027-1-any.pkg.tar.zst signed
+PASS: beta: every package is named grassfield-*
+PASS: beta: no package declares replaces=
+PASS: beta: notes valid, newest release 1.1.0beta1-3
+check-tree: 0 failure(s)
+PASS: the tree after the rollback still follows the contract
+
+== removal, and the real keyless keyring
+   pacman -Rn exit 0; [grassfield] sections 0; K ''
+PASS: pacman -Rn: exit 0, no [grassfield] line, no file, K no longer in pacman's keyring, pacman works
+PASS: this repository's keyring (no key until O11) installs and trusts nothing (184 keys before and after)
+checking dependencies...
+
+Packages (1) grassfield-keyring-20261027-1
+
+
+:: Do you want to remove these packages? [Y/n] 
+:: Processing package changes...
+removing grassfield-keyring...
+:: Running post-transaction hooks...
+(1/1) Arming ConditionNeedsUpdate...
+PASS: ... and removes cleanly
+
+== done: 0 failure(s)
+exit 0
