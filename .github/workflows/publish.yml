@@ -33,6 +33,8 @@ jobs:
         channel: [stable, beta]
     # Created and protected by the owner when publishing is enabled (ADR-0033 b.7): the owner approves each run (required
     # reviewers) and only main may deploy to it; it will hold that channel's key and storage credentials. None exists today.
+    # GitHub creates a missing environment, unprotected, the first time a job that names it runs: the owner creates and
+    # protects publish-stable and publish-beta BEFORE `if: false` is removed (owner step, docs/STATE.md).
     environment: publish-${{ matrix.channel }}
     concurrency:
       group: publish-${{ matrix.channel }}
@@ -65,5 +67,6 @@ jobs:
       # Then, once the owner decides: sign /tmp/catalog/grassfield-catalog.v1.json with the owner's key from this
       # environment (catalog.py sign), and run
       #   tools/publish.py --store <the bucket> --channel <channel> --releases <the release builds>
-      #                    --catalog /tmp/catalog --keyring-dir <grassfield-keyring's files>
-      # which checks the catalog as the Store does before it publishes anything. The bucket's backend waits for the host.
+      #                    --keyring-dir <grassfield-keyring's files> --catalog /tmp/catalog
+      # which checks every release file's signature and the catalog as the Store does before it publishes anything.
+      # The bucket's backend waits for the host.
