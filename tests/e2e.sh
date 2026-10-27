@@ -8,10 +8,12 @@
 #   set, is mounted as the container's CA bundle. Exit 0 all PASS (or SKIP without docker), 1 a FAIL, 2 usage.
 #
 # Inside (never elsewhere): throwaway keys K (signs) and KR (rogue), made here and gone with the container; a test
-# grassfield-keyring from keyring/ with K in it; a scratch clone of grassfield whose three local commits (never pushed)
-# make the releases 1.0.0, 1.0.1 and 1.1.0-beta1, each with its release notes and a repository.conf that pins K on a
-# file:// base; scripts/build-channel.sh builds each with grassfield's own PKGBUILD on Omarchy stable's package set, and
-# scripts/view.sh serves the tree as the edge rule would. The same container is then the user's machine:
+# grassfield-keyring from keyring/ with K in it; a scratch clone of grassfield whose three local commits and tags (never
+# pushed) make the releases v1.0.0, v1.0.1 and v1.1.0-beta1, each with its release notes and a repository.conf that pins K
+# on a file:// base; scripts/build-channel.sh builds each tag with grassfield's own PKGBUILD on Omarchy stable's package
+# set into its release builds (the notes of each with the channel's earlier releases, grassfield-keyring built once) and
+# the channels made from them, and scripts/view.sh serves the tree as the edge rule would. The same container is then the
+# user's machine:
 #   - the first installation of ADR-0033 b.3a (K added and locally signed, the section by hand, pacman -S from the
 #     repository), then `grassfield-channel-set stable` through real polkitd and pkexec;
 #   - 1.0.1 published: the client sees it with its notes, pacman -Syu installs it;
@@ -103,12 +105,18 @@ release() { # VERSION -> commit
   printf 'Grassfield %s: what changed.\nSecond line.\n' "$v" >"$d/packaging/release-notes/$v.en.txt"
   printf 'Grassfield %s : ce qui a changé.\n' "$v" >"$d/packaging/release-notes/$v.fr.txt"
   git -C "$d" add -A && git -C "$d" commit --quiet -m "e2e release $v (throwaway, container only)"
-  git -C "$d" rev-parse HEAD
+  git -C "$d" tag "v$v"   # in this throwaway clone only
+  echo "v$v"
 }
 C1=$(release 1.0.0) C2=$(release 1.0.1) C3=$(release 1.1.0-beta1)
 # The pkgrel each build gets: the one committed in grassfield's PKGBUILD (no GRASSFIELD_PKGREL here).
 REL=$(cd "$W/gf/packaging/arch" && env -u GRASSFIELD_PKGREL bash -c 'source ./PKGBUILD >/dev/null 2>&1; printf %s "$pkgrel"')
-echo "releases: 1.0.0 $C1, 1.0.1 $C2, 1.1.0-beta1 $C3 (pkgrel $REL)"
+echo "releases: $C1 $C2 $C3 (pkgrel $REL)"
+released() { # channel version -> the releases its release build's notes list
+  python3 -I -c 'import json, sys; print(" ".join(r["version"] for r in json.load(open(sys.argv[1]))["releases"]))' \
+    "$W/tree/releases/$1/$2/grassfield-notes.json" 2>/dev/null
+}
+keyring_sum() { sha256sum "$W"/tree/stable/x86_64/grassfield-keyring-*.pkg.tar.zst | awk '{print $1}'; }
 build() { # commit; this container is also the user's machine: its pacman.conf ([grassfield] included) is kept aside
   local rc
   cp /etc/pacman.conf "$W/pacman.conf.client"
@@ -127,8 +135,11 @@ expect "build-channel.sh 1.0.0 -> exit 0 ($(( $(date +%s) - start )) s)" test "$
 ((rc == 0)) || { tail -n 40 "$W/build-$C1.log"; exit 1; }
 grep -E '^(commit|channels|stable:|beta:|trust anchor|done)' "$W/build-$C1.log" | sed 's/^/   /'
 sed -n '/^ref/,/^package-set:/p' "$W"/tree/build-*.txt | sed 's/^/   /'
+expect "the release builds the publisher reads: releases/stable/1.0.0-$REL and releases/beta/1.0.0-$REL" \
+  test "$(released stable "1.0.0-$REL"):$(released beta "1.0.0-$REL")" == "1.0.0-$REL:1.0.0-$REL"
 expect "the tree follows the contract (check-tree.sh)" "$P/scripts/check-tree.sh" --tree "$W/tree" --keyring "$W/k.gpg"
 publish_view
+K1=$(keyring_sum)
 
 say "the user's machine: the first installation (ADR-0033 b.3a), then Set Up through pkexec"
 useradd -m alice && useradd -m bob
@@ -156,6 +167,12 @@ expect "the channel is stable; the checker: up-to-date" test "$(as alice grassfi
 say "A10 1.0.1 published: refused with a rogue signature, seen with its notes, installed"
 build "$C2"; rc=$?
 expect "build-channel.sh 1.0.1 -> exit 0" test "$rc" == 0 || tail -n 40 "$W/build-$C2.log"
+expect "1.0.1's stable notes list it and the earlier 1.0.0, from the tags (built once, ADR-0037 g)" \
+  test "$(released stable "1.0.1-$REL")" == "1.0.1-$REL 1.0.0-$REL"
+expect "grassfield-keyring built once: the same file in 1.0.1's release build ($(grep -c 'used again' "$W/build-$C2.log") reuse)" \
+  test "$(keyring_sum):$(sha256sum "$W"/tree/releases/stable/1.0.1-"$REL"/grassfield-keyring-*.pkg.tar.zst | awk '{print $1}')" == "$K1:$K1"
+expect "the tree follows the contract (check-tree.sh: every package with the SHA-256 its database records)" \
+  "$P/scripts/check-tree.sh" --tree "$W/tree" --keyring "$W/k.gpg"
 publish_view
 cp -a /srv/view "$W/view.good"
 v=/srv/view/stable/x86_64
@@ -191,6 +208,8 @@ expect "the checker: up-to-date" test "$(check state)" == up-to-date
 say "A10 beta, then back to stable without a downgrade"
 build "$C3"; rc=$?
 expect "build-channel.sh 1.1.0-beta1 -> exit 0, beta only" test "$rc:$(grep -c '^stable:' "$W/build-$C3.log")" == "0:0" || tail -n 40 "$W/build-$C3.log"
+expect "1.1.0-beta1's beta notes list every earlier release, plain and suffixed" \
+  test "$(released beta "1.1.0beta1-$REL")" == "1.1.0beta1-$REL 1.0.1-$REL 1.0.0-$REL"
 publish_view
 expect "on stable the checker still says up-to-date" test "$(check state)" == up-to-date
 expect "grassfield-channel-set beta -> exit 0" as alice grassfield-channel-set beta
