@@ -55,8 +55,8 @@ fi
   { echo "refused: runs only as root inside a throwaway container (/packages, /grassfield)"; exit 2; }
 P=/packages W=/work
 mkdir -p "$W" && chmod 755 "$W"
-fails=0
-expect() { local d=$1; shift; if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
+fails=0 checks=0
+expect() { local d=$1; shift; checks=$((checks + 1)); if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
 say() { printf '\n== %s\n' "$*"; }
 as() { local u=$1; shift; runuser -u "$u" -- env HOME="/home/$u" XDG_RUNTIME_DIR="/run/user/$(id -u "$u")" "$@"; }
 installed() { pacman -Q grassfield-desktop 2>/dev/null | awk '{print $2}'; }
@@ -133,8 +133,9 @@ build() { # tag [--pkgrel N]; this container is also the user's machine: its pac
   return $rc
 }
 publish_view() { "$P/scripts/view.sh" "$W/tree" /srv/view; }
-# As a client checks it: each signature by a key the tree's own grassfield-keyring trusts (K here).
-check_tree() { "$P/scripts/check-tree.sh" --tree "$W/tree" --trusted; }
+# As a client checks it: each signature by a key the tree's own grassfield-keyring trusts (K here), and that keyring the
+# test's keyring/ byte for byte.
+check_tree() { "$P/scripts/check-tree.sh" --tree "$W/tree" --trusted --keyring-src "$W/keyring"; }
 pointer() { python3 -I "$P/scripts/snapshot.py" current "$W/tree/$1/x86_64"; }
 desktop_in() { bsdtar -xOf "$1" | awk '/^%NAME%$/ { getline n } /^%VERSION%$/ { getline v; if (n == "grassfield-desktop") { print v; exit } }'; }
 
@@ -304,5 +305,5 @@ expect "this repository's keyring (no key until O11): pacman -U exit 0, installe
   test "$rc:$(pacman -Qq grassfield-keyring 2>/dev/null):$(cat /usr/share/grassfield/pacman-keyring/* | wc -c):$before:$ours" == "0:grassfield-keyring:0:$after:0"
 expect "... and removes cleanly" pacman -Rn --noconfirm grassfield-keyring
 
-say "done: $fails failure(s)"
+say "done: $checks checks, $fails failure(s)"
 ((fails == 0))

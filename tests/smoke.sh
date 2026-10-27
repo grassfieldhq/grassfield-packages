@@ -23,8 +23,8 @@ while (($#)); do
 done
 [[ -d $tree && -s $keyring ]] || { echo "usage: smoke.sh --tree DIR --keyring FILE" >&2; exit 2; }
 [[ -f /.dockerenv && $EUID == 0 ]] || { echo "smoke.sh: refused: runs only as root inside a throwaway container" >&2; exit 2; }
-fails=0
-expect() { local d=$1; shift; if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
+fails=0 checks=0
+expect() { local d=$1; shift; checks=$((checks + 1)); if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
 log=/tmp/smoke.log
 
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
@@ -56,5 +56,5 @@ fi
 pacman -Rns --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >>"$log" 2>&1
 expect "pacman -Rns: no [grassfield] line, no /etc/pacman.d/grassfield.conf, pacman works" \
   test "$(grep -c '^\[grassfield\]' /etc/pacman.conf):$(ls /etc/pacman.d/grassfield.conf 2>/dev/null | wc -l):$(pacman -Qq pacman)" == "0:0:pacman"
-echo "smoke: $fails failure(s)"
+echo "smoke: $checks checks, $fails failure(s)"
 ((fails == 0))

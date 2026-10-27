@@ -18,8 +18,8 @@ if [[ ${1:-} != --inside ]]; then
   exec docker run "${args[@]}" "$IMAGE" bash /p/tests/release-build.sh --inside
 fi
 [[ -f /.dockerenv && $EUID == 0 ]] || { echo "refused: runs only inside a throwaway container"; exit 2; }
-fails=0
-expect() { local d=$1; shift; if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
+fails=0 checks=0
+expect() { local d=$1; shift; checks=$((checks + 1)); if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
 install -m644 /p/build/pacman.conf /etc/pacman.conf
 { pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm --needed git python diffutils; } >/tmp/setup.log 2>&1 ||
   { tail -n 20 /tmp/setup.log; exit 1; }
@@ -64,12 +64,12 @@ mkkey() {
 K1=$(mkkey k1) K2=$(mkkey k2)
 gpg --homedir /root/keys/k2 --export "$K2" >/w/k2.gpg
 sig() { gpg --homedir "/root/keys/$1" --batch --detach-sign --no-armor --yes -o "$2.sig" "$2" 2>/dev/null; }
-mkpkg() { # dir name version [keyring folder: a grassfield-keyring with those files]
+mkpkg() { # dir name version [keyring folder: a grassfield-keyring with those files] [an extra .PKGINFO line]
   local d; d=$(mktemp -d)
   mkdir -p "$d/usr/share/$2" && echo "$2 $3" >"$d/usr/share/$2/v"
   [[ -z ${4:-} ]] || { mkdir -p "$d/usr/share/grassfield" && cp -r "$4" "$d/usr/share/grassfield/pacman-keyring"; }
-  printf 'pkgname = %s\npkgbase = %s\npkgver = %s\npkgdesc = test\nbuilddate = %s\npackager = test\nsize = 4\narch = any\nlicense = MIT\n' \
-    "$2" "$2" "$3" "$RANDOM" >"$d/.PKGINFO"
+  printf 'pkgname = %s\npkgbase = %s\npkgver = %s\npkgdesc = test\nbuilddate = %s\npackager = test\nsize = 4\narch = any\nlicense = MIT\n%s' \
+    "$2" "$2" "$3" "$RANDOM" "${5:+$5$'\n'}" >"$d/.PKGINFO"
   (cd "$d" && bsdtar --zstd -cf "$1/$2-$3-any.pkg.tar.zst" .PKGINFO usr)
 }
 r=/w/tree/releases/stable/1.0.1-3 pub=/w/published
@@ -83,14 +83,19 @@ cp -L /tmp/db/grassfield.db.tar.gz "$r/grassfield.db" && cp -L /tmp/db/grassfiel
 python3 -I /p/scripts/notes.py --channel stable --version 1.0.1-3 --date 2026-10-27 --en "$g/packaging/release-notes/1.0.1.en.txt" >"$r/grassfield-notes.json"
 for f in grassfield.db grassfield.files grassfield-notes.json; do sig k1 "$r/$f"; done
 cp -r /w/tree /w/tree.k1
-/p/scripts/sign-release.sh --release "$r" --gnupghome /root/keys/k2 --key "$K2" --published "$pub" >/tmp/sign.log 2>&1; rc=$?
-expect "sign-release.sh with K2 -> exit 0" test "$rc" == 0 || cat /tmp/sign.log
+/p/scripts/sign-release.sh prepare --release "$r" --keyring /w/kr-k2 --published "$pub" >/tmp/sign.log 2>&1; rc=$?
+expect "sign-release.sh prepare (no key: published packages, keyring/ compared, repo-add) -> exit 0" test "$rc" == 0 || cat /tmp/sign.log
 expect "... grassfield-keyring is the published file, with its signature" \
   cmp -s "$r/grassfield-keyring-20261027-1-any.pkg.tar.zst" "$pub/grassfield-keyring-20261027-1-any.pkg.tar.zst"
+expect "... the signatures sign must make removed, the published one kept" \
+  test "$(cd "$r" && ls ./*.sig | tr '\n' ' ')" == "./grassfield-keyring-20261027-1-any.pkg.tar.zst.sig "
+/p/scripts/sign-release.sh sign --release "$r" --gnupghome /root/keys/k2 --key "$K2" >/tmp/sign.log 2>&1; rc=$?
+expect "sign-release.sh sign (gpg only) -> exit 0, 4 files signed (the desktop package, the database, its files, the notes)" \
+  test "$rc:$(grep -c ': signed$' /tmp/sign.log)" == "0:4" || cat /tmp/sign.log
 expect "... the release build passes check-tree.sh with K2 alone (every signature, the database's SHA-256)" \
   /p/scripts/check-tree.sh --tree /w/tree --keyring /w/k2.gpg
-expect "... and check-tree.sh --trusted: K2 is in the trusted list of the grassfield-keyring the release ships" \
-  /p/scripts/check-tree.sh --tree /w/tree --trusted
+expect "... and check-tree.sh --trusted --keyring-src: K2 trusted by the keyring it ships, that keyring keyring/'s, nothing else in the folder" \
+  /p/scripts/check-tree.sh --tree /w/tree --trusted --keyring-src /w/kr-k2
 
 echo "== tools/publish.py publishes the signed release build"
 store=/w/store
@@ -125,11 +130,54 @@ expect "signed by K2, trusted but also revoked -> exit 1" test "$rc" == 1
 trusted_case "$K2:4:"$'\n' ""; rc=$?
 expect "signed by K2, trusted -> exit 0" test "$rc" == 0
 mkdir -p /w/pub.k1 && cp "$r"/grassfield-keyring-*.pkg.tar.zst /w/pub.k1/ && sig k1 /w/pub.k1/grassfield-keyring-20261027-1-any.pkg.tar.zst
-/p/scripts/sign-release.sh --release /w/tree.k1/releases/stable/1.0.1-3 --gnupghome /root/keys/k2 --key "$K2" --published /w/pub.k1 >/tmp/sign.log 2>&1; rc=$?
-expect "a published package not signed by the key -> exit 1 ($(tail -n 1 /tmp/sign.log))" test "$rc" == 1
+cp -r /w/tree.k1 /w/tree.k1b
+/p/scripts/sign-release.sh prepare --release /w/tree.k1/releases/stable/1.0.1-3 --keyring /w/kr-k2 --published /w/pub.k1 >/tmp/sign.log 2>&1; rc=$?
+expect "prepare: a published package not signed by a key keyring/ trusts -> exit 1 ($(tail -n 1 /tmp/sign.log))" test "$rc" == 1
+
+echo "== review minor 2: the keyring a release ships is keyring/'s, byte for byte"
+mkdir -p /w/kr-more && cp /w/kr-k2/* /w/kr-more/ && gpg --homedir /root/keys/k1 --export "$K1" >>/w/kr-more/grassfield.gpg &&
+  echo "$K1:4:" >>/w/kr-more/grassfield-trusted
+/p/scripts/sign-release.sh prepare --release /w/tree.k1b/releases/stable/1.0.1-3 --keyring /w/kr-more >/tmp/sign.log 2>&1; rc=$?
+expect "prepare: the release's grassfield-keyring is not keyring/'s -> exit 1 ($(tail -n 1 /tmp/sign.log))" test "$rc" == 1
+/p/scripts/check-tree.sh --tree /w/tree --trusted --keyring-src /w/kr-more >/tmp/check.log 2>&1; rc=$?
+expect "check-tree.sh --keyring-src: a keyring that is not keyring/'s -> exit 1 ($(grep -m1 FAIL /tmp/check.log))" test "$rc" == 1
+
+echo "== the allowlist: nothing but a release build's names is signed or uploaded"
+cp -r /w/tree /w/tree.extra && echo x >/w/tree.extra/releases/stable/1.0.1-3/extra.txt
+/p/scripts/check-tree.sh --tree /w/tree.extra --trusted --keyring-src /w/kr-k2 >/tmp/check.log 2>&1; rc=$?
+expect "check-tree.sh: a file the release build does not name -> exit 1 ($(grep -m1 FAIL /tmp/check.log))" test "$rc" == 1
+rm /w/tree.extra/releases/stable/1.0.1-3/grassfield.db.sig
+/p/scripts/sign-release.sh sign --release /w/tree.extra/releases/stable/1.0.1-3 --gnupghome /root/keys/k2 --key "$K2" >/tmp/sign.log 2>&1; rc=$?
+expect "sign: a name a release build does not hold -> exit 1, nothing signed ($(tail -n 1 /tmp/sign.log))" \
+  test "$rc:$(ls /w/tree.extra/releases/stable/1.0.1-3/grassfield.db.sig 2>/dev/null | wc -l)" == "1:0"
+
+echo "== review M1: a crafted .PKGINFO runs code in repo-add, never where the key is"
+c=/w/crafted && mkdir -p "$c"
+# repo-add splits the line on spaces and '=' and runs `declare "$var=..."`: a name with an array subscript and no space
+# runs its command substitution (${IFS} stands for the spaces).
+payload="x[\$(env>$c/leaked-env;touch\${IFS}/w/payload-ran)0] = 1"
+mkpkg "$c" grassfield-desktop 1.0.1-3 "" "$payload" && mkpkg "$c" grassfield-keyring 20261027-1 /w/kr-k2
+for f in "$c"/*.pkg.tar.zst; do sig k1 "$f"; done
+(cd "$c" && repo-add -q /tmp/db/grassfield.db.tar.gz ./*.pkg.tar.zst >/dev/null 2>&1; cp -L /tmp/db/grassfield.db.tar.gz grassfield.db &&
+  cp -L /tmp/db/grassfield.files.tar.gz grassfield.files && rm -f /tmp/db/* &&
+  python3 -I /p/scripts/notes.py --channel stable --version 1.0.1-3 --date 2026-10-27 --en "$g/packaging/release-notes/1.0.1.en.txt" >grassfield-notes.json)
+rm -f "$c/leaked-env" /w/payload-ran
+mkdir -p /w/old && (cd "$c" && GRASSFIELD_SIGNING_KEY=FAKE-SECRET-MARKER repo-add -q /w/old/x.db.tar.gz ./grassfield-desktop-*.pkg.tar.zst >/dev/null 2>&1)
+expect "the crafted package runs code in repo-add: where the key is, it leaks (the design before this fix)" \
+  grep -q FAKE-SECRET-MARKER "$c/leaked-env"
+rm -f "$c/leaked-env" /w/payload-ran
+GRASSFIELD_SIGNING_KEY=FAKE-SECRET-MARKER /p/scripts/sign-release.sh prepare --release "$c" --keyring /w/kr-k2 >/tmp/prep.log 2>&1; rc=$?
+expect "prepare refuses to run where the key is (exit 1)" test "$rc" == 1
+/p/scripts/sign-release.sh prepare --release "$c" --keyring /w/kr-k2 >/tmp/prep.log 2>&1; rc=$?
+expect "prepare, without the key: the payload ran there (exit $rc), and the environment it saw holds no key" \
+  test "$(ls /w/payload-ran 2>/dev/null | wc -l):$(grep -c FAKE-SECRET-MARKER "$c/leaked-env" 2>/dev/null || true)" == "1:0"
+GRASSFIELD_SIGNING_KEY=FAKE-SECRET-MARKER /p/scripts/sign-release.sh sign --release "$c" --gnupghome /root/keys/k2 --key "$K2" >/tmp/sign.log 2>&1; rc=$?
+expect "sign, where the key is: refuses the file the payload dropped, exit 1 ($(tail -n 1 /tmp/sign.log)), the key in none of its output" \
+  test "$rc:$(grep -c FAKE-SECRET-MARKER /tmp/sign.log)" == "1:0"
+expect "... and the key in no file of the release folder" test "$(grep -rl FAKE-SECRET-MARKER "$c" | wc -l)" == 0
 mkpkg /tmp grassfield-desktop 1.0.1-3 && cp /tmp/grassfield-desktop-1.0.1-3-any.pkg.tar.zst "$r/" && sig k2 "$r/grassfield-desktop-1.0.1-3-any.pkg.tar.zst"
 /p/scripts/check-tree.sh --tree /w/tree --keyring /w/k2.gpg >/tmp/check.log 2>&1; rc=$?
 expect "a package whose bytes are not the ones its database records -> check-tree.sh exit 1 ($(grep -m1 FAIL /tmp/check.log))" test "$rc" == 1
 
-echo "done: $fails failure(s)"
+echo "done: $checks checks, $fails failure(s)"
 ((fails == 0))
