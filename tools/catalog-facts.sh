@@ -53,18 +53,19 @@ mapfile -t wanted < <(python3 -I "$tool" packages --src "$src")
 # read from gpg itself on a copy of the keyring: pacman-key --verify exits 0 for a good signature by any key of the keyring,
 # trusted or not, and for a disabled one (grassfield ADR-0037 S19). One good detached signature, its key fully or
 # ultimately valid and not disabled, nothing else.
-pacman_trusted() {
-  local home status signer
+pacman_trusted() (
+  # A subshell: its temporary home goes with it, whatever the outcome.
   home=$(mktemp -d)
-  cp /etc/pacman.d/gnupg/pubring.* /etc/pacman.d/gnupg/trustdb.gpg "$home"/ 2>/dev/null || return 1
-  status=$(gpg --homedir "$home" --batch --no-tty --no-autostart --status-fd 1 --verify "$1" "$2" 2>/dev/null) || return 1
-  grep -qE '^\[GNUPG:\] (PLAINTEXT|BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|NO_PUBKEY)( |$)' <<<"$status" && return 1
-  [[ $(grep -c '^\[GNUPG:\] VALIDSIG ' <<<"$status") == 1 ]] || return 1
-  grep -qE '^\[GNUPG:\] TRUST_(FULLY|ULTIMATE)( |$)' <<<"$status" || return 1
+  trap 'rm -rf "$home"' EXIT
+  cp /etc/pacman.d/gnupg/pubring.* /etc/pacman.d/gnupg/trustdb.gpg "$home"/ 2>/dev/null || exit 1
+  status=$(gpg --homedir "$home" --batch --no-tty --no-autostart --status-fd 1 --verify "$1" "$2" 2>/dev/null) || exit 1
+  grep -qE '^\[GNUPG:\] (PLAINTEXT|BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG|NO_PUBKEY)( |$)' <<<"$status" && exit 1
+  [[ $(grep -c '^\[GNUPG:\] VALIDSIG ' <<<"$status") == 1 ]] || exit 1
+  grep -qE '^\[GNUPG:\] TRUST_(FULLY|ULTIMATE)( |$)' <<<"$status" || exit 1
   signer=$(awk '$2 == "VALIDSIG" {print $12}' <<<"$status")
   gpg --homedir "$home" --batch --no-autostart --with-colons --list-keys "$signer" 2>/dev/null |
     awk -F: '$1 == "pub" {n++; ok = ($2 == "f" || $2 == "u") && $12 !~ /D/} END {exit !(n == 1 && ok)}'
-}
+)
 cache=$(mktemp -d)
 url=$(pacman -Sp archlinux-appstream-data | tail -1)
 pkg=$cache/$(basename "$url")
