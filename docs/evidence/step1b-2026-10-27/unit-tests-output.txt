@@ -53,7 +53,7 @@ test_rollback_refusals (test_publish.Publisher.test_rollback_refusals) ... ok
 test_the_command_needs_the_keyring (test_publish.Publisher.test_the_command_needs_the_keyring) ... ok
 
 ----------------------------------------------------------------------
-Ran 52 tests in 6.147s
+Ran 52 tests in 6.401s
 
 OK
 unit exit 0
