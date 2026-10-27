@@ -1,0 +1,88 @@
+{
+  "order": 10,
+  "id": "discover",
+  "title": {"en": "Discover", "fr": "Découvrir"},
+  "symbol": "discover",
+  "blocks": [
+    {
+      "kind": "hero",
+      "items": [
+        {
+          "app": "org.gimp.GIMP",
+          "eyebrow": {"en": "Image editing", "fr": "Retouche d'images"},
+          "title": {"en": "Retouch, paint and compose", "fr": "Retoucher, peindre et composer"},
+          "text": {
+            "en": "A complete image editor with layers, masks and filters. Free and open source.",
+            "fr": "Un éditeur d'images complet, avec calques, masques et filtres. Libre et gratuit."
+          }
+        },
+        {
+          "app": "org.blender.Blender",
+          "eyebrow": {"en": "3D creation", "fr": "Création 3D"},
+          "title": {"en": "Model, animate and render", "fr": "Modéliser, animer et rendre"},
+          "text": {
+            "en": "Everything from the first sketch to the final film, in one app.",
+            "fr": "Du premier croquis au film terminé, dans une seule app."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "cards",
+      "items": [
+        {
+          "app": "org.inkscape.Inkscape",
+          "eyebrow": {"en": "Vector drawing", "fr": "Dessin vectoriel"},
+          "title": {"en": "Logos, icons and posters", "fr": "Logos, icônes et affiches"},
+          "text": {
+            "en": "Draw shapes that stay sharp at any size, and save them as SVG.",
+            "fr": "Dessinez des formes qui restent nettes à toutes les tailles, et enregistrez-les en SVG."
+          }
+        },
+        {
+          "app": "com.valvesoftware.Steam.desktop",
+          "eyebrow": {"en": "Games", "fr": "Jeux"},
+          "title": {"en": "Your game library", "fr": "Votre bibliothèque de jeux"},
+          "text": {
+            "en": "Install Steam with the drivers its games need, in one step.",
+            "fr": "Installez Steam avec les pilotes dont ses jeux ont besoin, en une seule étape."
+          }
+        },
+        {
+          "app": "org.audacityteam.Audacity",
+          "eyebrow": {"en": "Audio", "fr": "Audio"},
+          "title": {"en": "Record and edit sound", "fr": "Enregistrer et monter le son"},
+          "text": {
+            "en": "Cut, mix and clean up recordings, from podcasts to music.",
+            "fr": "Coupez, mixez et nettoyez vos enregistrements, du podcast à la musique."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {"en": "Make something", "fr": "Créer quelque chose"},
+      "apps": ["org.gimp.GIMP", "org.inkscape.Inkscape", "org.kde.krita", "org.blender.Blender"]
+    },
+    {
+      "kind": "row",
+      "title": {"en": "Listen and watch", "fr": "Écouter et regarder"},
+      "apps": ["com.spotify.Client", "org.videolan.vlc", "org.audacityteam.Audacity"]
+    },
+    {
+      "kind": "row",
+      "title": {"en": "Play", "fr": "Jouer"},
+      "apps": ["com.valvesoftware.Steam.desktop", "com.heroicgameslauncher.hgl"]
+    },
+    {
+      "kind": "row",
+      "title": {"en": "Write code", "fr": "Écrire du code"},
+      "apps": ["com.visualstudio.code", "dev.zed.Zed"]
+    },
+    {
+      "kind": "row",
+      "title": {"en": "Browse and write", "fr": "Naviguer et écrire"},
+      "apps": ["org.mozilla.firefox", "net.thunderbird.Thunderbird"]
+    }
+  ]
+}

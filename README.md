@@ -26,27 +26,32 @@ catalog of Grassfield Store.
   release built and signed for the channel and the catalog of `main`'s head. A cancelled waiting run loses nothing; a run
   with nothing new writes nothing.
 
-## Status
-Nothing is published. The repository stays private until the owner decides, after the legal review of milestone M5.
-CI produces artifacts only; the publishing step is disabled. `grassfield-keyring` holds no key until the owner provides
-the project's signing key (ADR-0033 O11, O20).
-
 ## Layout
 | Path | What |
 |---|---|
+| `catalog/` | the Store catalog's sources: categories, sections, apps, icons, the pinned Omarchy release (`catalog/README.md`) |
 | `keyring/` | `grassfield-keyring`: `PKGBUILD`, its install script, and `grassfield.gpg`, `grassfield-trusted`, `grassfield-revoked` (empty until the owner's key), installed in Grassfield's private folder `/usr/share/grassfield/pacman-keyring/` (ADR-0033 b.2) |
 | `build/pacman.conf` | the build container's package set: Omarchy's stable mirror, so Hyprland, Qt and KF6 are the versions Omarchy's stable users run (ADR-0033 f) |
-| `scripts/build-channel.sh` | one Grassfield tag or commit, built once → makepkg of grassfield's own PKGBUILD → signed packages → its **release build** for each channel it goes to (`releases/<channel>/<version>/`: packages, a database of this release alone, release notes, all signed), which the channel's publisher reads (ADR-0037 g) → a channel tree made from them as the publisher makes it, for CI's artifact and the tests; grassfield-keyring is built once per version; throwaway keys only (it refuses to start beside the project's key) |
-| `scripts/snapshot.py` | the publisher's snapshot format for the test trees: pointer `{"snapshot": "<id>"}`, `manifest.json`, the current snapshot's other files kept (the catalog), the pointer written only if it has not moved; `tools/publish.py` (Grassfield Store step 1) takes over once merged |
+| `tools/publish.py` | the one serialized publisher of a channel (ADR-0033 h.2, ADR-0037 g): from the current snapshot, the newest release build and the catalog of `main`'s head, never backwards, immutable names, the pointer written only if it has not moved; ADR-0033 h.2's deliberate rollback (`--rollback-to`). Written and disabled in CI (the bucket's backend waits for the host); the tests and the build's test trees use its local store |
+| `tools/catalog.py` | validates the sources, checks them against what they name, builds, signs and verifies the catalog (standard library) |
+| `tools/catalog-facts.sh` | gathers those facts in a throwaway Arch container: Omarchy's stable mirror, Arch's AppStream, Flathub |
+| `scripts/build-channel.sh` | one Grassfield tag or commit, built once → makepkg of grassfield's own PKGBUILD → signed packages → its **release build** for each channel it goes to (`releases/<channel>/<version>/`: packages, a database of this release alone, release notes, all signed), which the publisher reads → the channel tree made from them by `tools/publish.py`, for CI's artifact and the tests; grassfield-keyring is built once per version; throwaway keys only (it refuses to start beside the project's key) |
 | `scripts/sign-release.sh` | a tested release build signed with the project's key (the `release` job, disabled), in a container that runs no build; a package already published is used as it is |
 | `scripts/notes.py` | `grassfield-notes.json` from grassfield's `packaging/release-notes/<VERSION>.{en,fr}.txt`, with the channel's earlier releases from the tag's own repository |
 | `scripts/check-tree.sh` | the tree against the contract: signatures (`--trusted`: by a key the shipped grassfield-keyring trusts, as a client checks them), every package with the SHA-256 its database records, each snapshot's manifest, names, no `replaces=`, notes, no links |
-| `scripts/rollback.sh` | a rollback is a new snapshot with older packages, never the pointer moved back (ADR-0033 h.2, R4); the newer release builds are withdrawn so the publisher's next run does not put them back |
+| `scripts/rollback.sh` | a deliberate rollback (ADR-0033 h.2, R4): the newer release builds withdrawn, so a later run does not put them back, then `tools/publish.py --rollback-to`, a new snapshot, never the pointer moved back |
+| `scripts/snapshot.py` | reads a channel's pointer (`{"snapshot": "<id>"}`) for the shell tools |
 | `scripts/view.sh`, `scripts/serve.py` | for tests: the tree as the hosting's edge rule serves it, as files (`file://`) or over HTTP with its redirects |
-| `tests/e2e.sh` | the end-to-end exercise with the real packages and grassfield's client, in a throwaway container |
-| `tests/smoke.sh` | CI's test job: a fresh machine installs a built tree and the client answers |
-| `tests/release-build.sh` | the release notes' earlier releases from the tags, `sign-release.sh`, `snapshot.py` and `check-tree.sh` with small fake packages |
-| `.github/workflows/` | `build` (on demand, a tag or a pkgrel rebuild of it: build with a throwaway key, test; `release`, written and disabled, per channel in the publisher's environments: a tag's tested release builds signed with the project's key, checked as a client checks them, and kept where the publisher reads them), `poll` (every 15 minutes, off until the owner turns it on), `watch-hyprland` (by hand until something is published). The one serialized publisher per channel is the `publish` workflow of Grassfield Store's step 1 (ADR-0037 g): it reads the channel's newest release build |
+| `tests/` | unit tests of the catalog and the publisher (`tests/run-in-container.sh` runs them where throwaway keys may be made); `e2e.sh`, the end-to-end exercise with the real packages and grassfield's client; `smoke.sh`, CI's test job; `release-build.sh`, the release build's pieces with small fake packages |
+| `.github/workflows/catalog.yml` | CI: tests, checks, a catalog signed with a throwaway key as an artifact |
+| `.github/workflows/build.yml` | on demand, a tag or a pkgrel rebuild of it: build with a throwaway key, test; `release`, written and disabled, per channel in the publisher's environments: a tag's tested release builds signed with the project's key, checked as a client checks them, and kept where the publisher reads them |
+| `.github/workflows/publish.yml` | the publishing job, one per channel, serialized, written and disabled (`if: false`, no secret): on a push to `main` or when a build completes, it publishes the latest state |
+| `.github/workflows/poll.yml`, `watch-hyprland.yml` | the tag poll (every 15 minutes, off until the owner turns it on); the Hyprland watch (by hand until something is published) |
+
+## Status
+Nothing is published. The repository stays private until the owner decides, after the legal review of milestone M5.
+CI produces artifacts only; the publishing workflow and the release job are disabled. `grassfield-keyring` holds no key
+until the owner provides the project's signing key (ADR-0033 O11, O20).
 
 The tree a build writes (ADR-0033 g, h.2; ADR-0037 g):
 
@@ -61,6 +66,7 @@ The tree a build writes (ADR-0033 g, h.2; ADR-0037 g):
 ## Commands
 Every build and test runs as root inside a throwaway Arch container, never on a real machine (`CLAUDE.md`).
 
+    tests/run-in-container.sh                                        # unit tests: the catalog and the publisher
     tests/e2e.sh --grassfield ~/workspace/grassfield [--ref REF]     # builds 1.0.0, 1.0.1, 1.0.1 pkgrel+1, 1.1.0-beta1 (~1 h)
     tests/release-build.sh                                           # the release build's pieces, fake packages (~2 min)
     docker run --rm -v "$PWD:/packages:ro" -v <grassfield>:/grassfield:ro -v "$PWD/out:/out" \
@@ -74,7 +80,8 @@ Every build and test runs as root inside a throwaway Arch container, never on a 
   build workflow's `release` job uses too, with the secrets `GRASSFIELD_SIGNING_KEY`, `GRASSFIELD_SIGNING_PASSPHRASE`
   (O6), `GRASSFIELD_S3_ACCESS_KEY_ID`, `GRASSFIELD_S3_SECRET_ACCESS_KEY` and the variables `GRASSFIELD_S3_BUCKET`,
   `GRASSFIELD_S3_ENDPOINT` (O8);
-- the public key and its fingerprint (in `keyring/` here and in grassfield's `packaging/pacman/`), the host name.
+- the public key and its fingerprint (in `keyring/` here and in grassfield's `packaging/pacman/`), the host name;
+- the bucket's backend of `tools/publish.py`, with the host.
 
 ## License
 MIT, see `LICENSE`. Packaged third-party software keeps its own licenses; app icons in the catalog keep their owners' terms,

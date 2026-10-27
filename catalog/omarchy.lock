@@ -1,0 +1,4 @@
+# The Omarchy release the catalog's recipes and packages are checked against (ADR-0037 g "CI also refuses"): the owner's
+# version. tools/catalog-facts.sh refuses another checkout. Bump both lines together, after reading the recipes again.
+tag v4.0.4
+commit c668141e9c42b13c80c9ca4ea108e11708c5e8a5
