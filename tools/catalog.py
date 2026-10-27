@@ -27,6 +27,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import urllib.parse
 
 CATALOG_NAME = "grassfield-catalog.v1.json"
 MAX_CATALOG = 1024 * 1024
@@ -60,10 +61,16 @@ LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 8
 # Bidirectional formatting characters: plain text never needs them, and they can make a text read other than it is.
 BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
-# Recipes: what the catalog may not name (ADR-0037 a and e.4). A sync makes the next install a partial upgrade (S12);
-# a download runs code pacman never checked (the setups Omarchy marks as such: GeForce NOW, Battle.net, dev-env).
-SYNC = re.compile(r"\b(pacman|yay|paru)\b[^\n;&|]*?\s(-S[A-Za-z]*y[A-Za-z]*|--refresh)\b")
-DOWNLOAD = re.compile(r"\b(curl|wget)\b")
+# Recipes: what the catalog may not name (ADR-0037 a and e.4). A sync makes the next install a partial upgrade (S12):
+# any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or --sysupgrade on a pacman, yay or paru command line, and
+# a yay with no operation (yay alone is -Syu). A download runs code pacman never checked: curl, wget, git clone, makepkg,
+# yay -G or -B (the setups Omarchy marks as such: GeForce NOW, Battle.net, dev-env), and an AUR build (omarchy-pkg-aur-add
+# or yay -S of a name no repository serves, or of a name known only at run time).
+SYNC = re.compile(r"\b(pacman|yay|paru)\b[^\n;&|]*?\s(-[A-Za-z]*y[A-Za-z]*|--refresh|--sysupgrade)\b")
+DOWNLOAD = re.compile(r"\b(curl|wget|makepkg)\b|\bgit\s+clone\b|\byay\b[^\n;&|]*\s(-G|--getpkgbuild|-B|--build)\b")
+COMMAND_START = r"(?:^|[;&|(`]|\bthen|\bdo|\bsudo)\s*"
+YAY_COMMAND = re.compile(COMMAND_START + r"yay\b([^\n;&|)]*)", re.M)
+AUR_INSTALL = re.compile(r"\bomarchy-pkg-aur-add\b([^\n;&|)]*)|" + COMMAND_START + r"yay\s+-S[A-Za-z]*\b([^\n;&|)]*)", re.M)
 OMARCHY_CALL = re.compile(r"\b(omarchy-[a-z0-9-]+)\b")
 # Omarchy's two launcher makers download an icon (data, never run: ADR-0037 S9), not code; read again at each pin bump.
 DATA_DOWNLOADS = {"bin/omarchy-webapp-install", "bin/omarchy-tui-install"}
@@ -95,8 +102,12 @@ def plain_text_problem(value, limit, newlines):
     for ch in value:
         if ch == "\n" and newlines:
             continue
-        if unicodedata.category(ch) == "Cc" or ch in BIDI:
-            return f"control or bidirectional character U+{ord(ch):04X}"
+        # Cc: controls; Cf: format characters (bidirectional controls, zero-width characters, the BOM, soft hyphens);
+        # Zl, Zp: line and paragraph separators, line breaks a one-line title must not hide.
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") or ch in BIDI:
+            return f"control, format or separator character U+{ord(ch):04X}"
+    if "<" in value or ">" in value or re.search(r"&(#[0-9]+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);", value):
+        return "markup (< > or an &entity;): plain text only"
     if unicodedata.normalize("NFC", value) != value:
         return "not in Unicode NFC form"
     return None
@@ -126,10 +137,20 @@ def https_problem(url):
         return "not a string"
     if len(url.encode("utf-8")) > 2048:
         return "longer than 2048 bytes"
-    if not url.startswith("https://") or len(url) <= len("https://"):
+    if any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in url):
+        return "whitespace, control or format character"
+    try:
+        parts = urllib.parse.urlsplit(url)
+        parts.port  # an invalid port raises
+    except ValueError:
+        return "not a URL"
+    if parts.scheme != "https" or not url.startswith("https://"):
         return "not an https URL"
-    if any(ch.isspace() or unicodedata.category(ch) == "Cc" for ch in url):
-        return "whitespace or control character"
+    if "@" in parts.netloc:
+        return "user information in the URL"
+    host = parts.hostname or ""
+    if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", host):
+        return "no valid host"
     return None
 
 
@@ -263,7 +284,7 @@ def validate_block(b, p, where, app_ids):
             p.add(where, "apps: 1 to 24 app ids")
             return
         for app in ids:
-            if app not in app_ids:
+            if not isinstance(app, str) or app not in app_ids:
                 p.add(where, f"app '{app}' is not in apps")
         if len(set(map(str, ids))) != len(ids):
             p.add(where, "an app appears twice")
@@ -280,7 +301,7 @@ def validate_block(b, p, where, app_ids):
             p.add(w, "not an object")
             continue
         check_keys(p, w, item, ("app", "eyebrow", "title", "text"))
-        if item.get("app") not in app_ids:
+        if not isinstance(item.get("app"), str) or item["app"] not in app_ids:
             p.add(w, f"app '{item.get('app')}' is not in apps")
         check_localized(p, f"{w}.eyebrow", item.get("eyebrow"), LEN_EYEBROW, required=False)
         check_localized(p, f"{w}.title", item.get("title"), LEN_TITLE)
@@ -298,6 +319,12 @@ def validate_app(a, p, where, category_ids):
     validate_source(a.get("source"), p, f"{where}.source")
     kind = a.get("source", {}).get("kind") if isinstance(a.get("source"), dict) else None
     check_localized(p, f"{where}.name", a.get("name"), LEN_TITLE, required=kind == "webapp")
+    if kind == "webapp" and isinstance(a.get("name"), dict):
+        # Omarchy's installer makes a file of the name (ADR-0037 e.5, S9): every language's name must be one.
+        for lang, name in a["name"].items():
+            problem = webapp_name_problem(name)
+            if problem:
+                p.add(f"{where}.name.{lang}", f"not a web app name: {problem}")
     check_localized(p, f"{where}.summary", a.get("summary"), LEN_TEXT, required=False)
     check_localized(p, f"{where}.description", a.get("description"), LEN_DESCRIPTION, newlines=True, required=False)
     check_localized(p, f"{where}.developer", a.get("developer"), LEN_TITLE, required=False)
@@ -334,7 +361,7 @@ def validate_app(a, p, where, category_ids):
             p.add(where, "categories: 1 to 4 category ids")
         else:
             for c in cats:
-                if c not in category_ids:
+                if not isinstance(c, str) or c not in category_ids:
                     p.add(where, f"category '{c}' is not in categories")
 
 
@@ -446,6 +473,9 @@ def load_sources(src, p):
             p.add(path, f"{len(data)} bytes, {size[0]}x{size[1]}: at most {MAX_ICON} bytes and {MAX_ICON_SIDE}x{MAX_ICON_SIDE}")
             continue
         meta = read_json(os.path.join(icon_dir, stem + ".json"), p) or {}
+        if not isinstance(meta, dict):
+            p.add(os.path.join(icon_dir, stem + ".json"), "not an object")
+            meta = {}
         check_keys(p, path, meta, ("license", "origin", "review"))
         if meta.get("review") != "needs legal review":
             p.add(path, 'a publisher\'s icon is marked "review": "needs legal review" (owner decision ST10)')
@@ -465,7 +495,7 @@ def load_sources(src, p):
             p.add(path, f"the file must be named after the app's id ({app.get('id')}.json)")
         if "icon" in app:
             ref = app["icon"]
-            if ref not in icons:
+            if not isinstance(ref, str) or ref not in icons:
                 p.add(path, f"icon '{ref}' is not in icons/")
                 del app["icon"]
             else:
@@ -491,7 +521,7 @@ def load_sources(src, p):
         if not is_int(order):
             p.add(path, '"order" (an integer) is missing')
             order = 0
-        sections.append((order, section.get("id") or "", section))
+        sections.append((order, str(section.get("id") or ""), section))
     orders = [o for o, _, _ in sections]
     if len(set(orders)) != len(orders):
         p.add("sections", "two sections have the same order")
@@ -507,7 +537,7 @@ def load_sources(src, p):
 def wanted_packages(obj):
     """Every package name a fact is needed for: repo apps and the packages of setups."""
     names = set()
-    for a in obj.get("apps", []):
+    for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) else []:
         s = a.get("source") if isinstance(a, dict) else None
         if not isinstance(s, dict):
             continue
@@ -546,17 +576,46 @@ def recipe_closure(omarchy, name):
     return out
 
 
-def recipe_problems(omarchy, name, args):
+def aur_builds(code, repo):
+    """Names an AUR install would build: those no repository serves, or that are known only at run time."""
+    built = []
+    for m in AUR_INSTALL.finditer(code):
+        for token in (m.group(1) or m.group(2) or "").split():
+            if token.startswith("-"):
+                continue
+            name = token.strip("'\"")
+            if "$" in name or "`" in name or not PACKAGE.match(name):
+                built.append(f"{token} (known only at run time)")
+            elif repo is not None and name not in repo:
+                built.append(name)
+    return built
+
+
+def bare_yay(code):
+    # yay with no operation is -Syu; with only a search term, an interactive AUR install.
+    for m in YAY_COMMAND.finditer(code):
+        tokens = [t for t in m.group(1).split() if not t.startswith("--")]
+        if not tokens or not re.match(r"^-[SRQGPYDTUFBW]", tokens[0]):
+            return True
+    return False
+
+
+def recipe_problems(omarchy, name, args, repo=None):
+    """repo: the package names Omarchy's stable mirror serves (None in tests that have no facts)."""
     path = os.path.join(omarchy, "bin", name)
     if not os.path.isfile(path):
         return [f"{name} is not in the pinned Omarchy release"]
     problems = []
     for rel, text in recipe_closure(omarchy, name):
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        if SYNC.search(code):
+        if SYNC.search(code) or bare_yay(code):
             problems.append(f"{name} syncs pacman's databases (through {rel}): a partial upgrade (ADR-0037 e.4)")
         if DOWNLOAD.search(code) and rel not in DATA_DOWNLOADS:
             problems.append(f"{name} downloads outside pacman (through {rel}): not offered (ADR-0037 a)")
+        # omarchy-pkg-aur-add's own yay -S "$@" is judged where it is called, with the names it is given.
+        built = [] if rel == "bin/omarchy-pkg-aur-add" else aur_builds(code, repo)
+        if built:
+            problems.append(f"{name} builds from the AUR (through {rel}): {', '.join(sorted(set(built)))} (ADR-0037 a)")
     with open(path, encoding="utf-8", errors="replace") as f:
         own = f.read()
     for arg in args:
@@ -585,8 +644,14 @@ def check_env(obj, facts, omarchy, p):
     except (OSError, ValueError) as e:
         p.add(facts, f"facts cannot be read: {e}")
         return
-    for a in obj.get("apps", []):
-        s, where = a.get("source", {}), f"app {a.get('id')}"
+    for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) else []:
+        if not isinstance(a, dict) or not isinstance(a.get("id"), str) or not isinstance(a.get("source"), dict):
+            continue  # validate reports it
+        s, where = a["source"], f"app {a['id']}"
+        q = Problems()
+        validate_source(s, q, where)
+        if q:
+            continue  # validate reports it; the facts are checked against well-formed sources only
         kind = s.get("kind")
         if kind == "repo":
             pkg = s.get("package")
@@ -600,9 +665,9 @@ def check_env(obj, facts, omarchy, p):
                 p.add(where, f"desktopId {a['desktopId']} is not one of {pkg}'s entries ({', '.join(desktop) or 'none'})")
             appstream_id_problem(p, where, a, pkg, appstream)
         elif kind == "omarchy-setup":
-            for problem in recipe_problems(omarchy, s.get("install", ""), s.get("args", [])):
+            for problem in recipe_problems(omarchy, s.get("install", ""), s.get("args", []), set(repo)):
                 p.add(where, problem)
-            for problem in recipe_problems(omarchy, s.get("remove", ""), s.get("removeArgs", [])):
+            for problem in recipe_problems(omarchy, s.get("remove", ""), s.get("removeArgs", []), set(repo)):
                 p.add(where, problem)
             for pkg in s.get("packages", []):
                 if pkg not in repo:
@@ -661,6 +726,16 @@ def write_file(path, data):
         raise
 
 
+def read_fingerprints(path):
+    """40-hex fingerprints of a keyring list, upper case, whatever follows a ':' and the spaces around ignored."""
+    out = set()
+    for line in read_lines(path):
+        fpr = line.split(":")[0].strip().upper()
+        if FINGERPRINT.match(fpr):
+            out.add(fpr)
+    return out
+
+
 def child_env(homedir):
     return {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GNUPGHOME": homedir}
 
@@ -682,14 +757,17 @@ def verify(directory, keyring_dir, channel, min_serial, p):
     path = os.path.join(directory, CATALOG_NAME)
     keyring = os.path.join(keyring_dir, "grassfield.gpg")
     try:
-        trusted = {line.split(":")[0] for line in read_lines(os.path.join(keyring_dir, "grassfield-trusted"))}
+        trusted = read_fingerprints(os.path.join(keyring_dir, "grassfield-trusted"))
         revoked_path = os.path.join(keyring_dir, "grassfield-revoked")
-        revoked = set(read_lines(revoked_path)) if os.path.exists(revoked_path) else set()
-    except OSError as e:
+        revoked = read_fingerprints(revoked_path) if os.path.exists(revoked_path) else set()
+    except (OSError, UnicodeDecodeError) as e:
         p.add(keyring_dir, f"keyring files cannot be read: {e}")
         return
-    if not trusted or not os.path.getsize(keyring):
+    if not trusted or not os.path.isfile(keyring) or not os.path.getsize(keyring):
         p.add(keyring_dir, "no trusted key: no catalog is used")
+        return
+    if not os.path.isfile(path) or not os.path.isfile(path + ".sig"):
+        p.add(path, "missing, or its .sig is")
         return
     with tempfile.TemporaryDirectory() as home:
         run = subprocess.run(["gpgv", "--homedir", home, "--keyring", keyring, "--status-fd", "1",
@@ -699,7 +777,7 @@ def verify(directory, keyring_dir, channel, min_serial, p):
     for line in run.stdout.splitlines():
         fields = line.split()
         if fields[:2] == ["[GNUPG:]", "VALIDSIG"] and len(fields) >= 12:
-            signer = fields[11]  # VALIDSIG's argument 10: the primary key's fingerprint
+            signer = fields[11].upper()  # VALIDSIG's argument 10: the primary key's fingerprint
     if run.returncode != 0 or signer is None:
         p.add(path, f"bad or missing signature (gpgv exit {run.returncode})")
         return
@@ -717,6 +795,8 @@ def verify(directory, keyring_dir, channel, min_serial, p):
         p.add(path, f"signed, but not UTF-8 JSON: {e}")
         return
     validate_catalog(obj, p, channel)
+    if not isinstance(obj, dict):
+        return
     if is_int(obj.get("serial")) and obj["serial"] < min_serial:
         p.add(path, f"serial {obj['serial']} is lower than the one already accepted ({min_serial})")
     for a in obj.get("apps", []) if isinstance(obj, dict) and isinstance(obj.get("apps"), list) else []:
@@ -787,4 +867,8 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as e:
+        print(f"catalog.py: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(2)

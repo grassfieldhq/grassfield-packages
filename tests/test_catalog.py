@@ -96,13 +96,25 @@ class Rules(unittest.TestCase):
                     "language 'de'")
         self.broken(lambda o: o["sections"][0].update(title={"en": "x" * 41}), "longer than 40")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(title={"en": "a\nb"}),
-                    "control or bidirectional character U+000A")
+                    "control, format or separator character U+000A")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": "evil\u202etxt"}),
                     "U+202E")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": " padded"}),
                     "space at an end")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": "é"}), "NFC")
         self.broken(lambda o: o["sections"][0]["blocks"][0]["items"][0].update(title="Paint"), "not an object")
+        # Format and separator characters: zero-width space, BOM, soft hyphen, line and paragraph separators.
+        for bad, code in (("zero\u200bwidth", "U+200B"), ("\ufeffbom", "U+FEFF"),
+                          ("soft\u00adhyphen", "U+00AD"), ("one\u2028two", "U+2028"),
+                          ("one\u2029two", "U+2029")):
+            self.broken(lambda o, bad=bad: o["sections"][0]["blocks"][0]["items"][0].update(title={"en": bad}), code)
+        # Markup: plain text only, so nothing a renderer could read as rich text.
+        for bad in ("<b>bold</b>", "a > b", "Tom &amp; Jerry", "&#x202e;", "&#8238;"):
+            self.broken(lambda o, bad=bad: o["sections"][0]["blocks"][0]["items"][0].update(text={"en": bad}),
+                        "markup")
+        ok = copy.deepcopy(GOOD)
+        ok["sections"][0]["blocks"][0]["items"][0]["text"] = {"en": "Tom & Jerry; 100% free & open", "fr": "Été"}
+        self.assertEqual(problems(ok), [])
 
     def test_apps(self):
         self.broken(lambda o: o["apps"].append(copy.deepcopy(o["apps"][0])), "id appears twice")
@@ -112,6 +124,16 @@ class Rules(unittest.TestCase):
         self.broken(lambda o: o["apps"][0].update(categories=["missing"]), "category 'missing'")
         self.broken(lambda o: o["apps"][0].update(homepage="http://example.com"), "not an https URL")
         self.broken(lambda o: o["apps"][0].update(homepage="https://exa mple.com"), "whitespace")
+        for bad, why in (("https://@", "user information"), ("https://a.com@evil.example/", "user information"),
+                         ("https://user:pw@example.com/", "user information"), ("https:///x", "no valid host"),
+                         ("https://", "no valid host"), ("https://-bad.example/", "no valid host"),
+                         ("https://example.com:99999/", "not a URL"), ("HTTPS://example.com/", "not an https URL")):
+            self.broken(lambda o, bad=bad: o["apps"][0].update(homepage=bad), why)
+            self.broken(lambda o, bad=bad: o["apps"][1]["source"].update(url=bad), why)
+        for good in ("https://example.com", "https://www.example.com/path?q=1#top", "https://example.com:8443/"):
+            ok = copy.deepcopy(GOOD)
+            ok["apps"][0]["homepage"] = good
+            self.assertEqual(problems(ok), [], good)
         self.broken(lambda o: o["apps"][0].update(desktopId="paint"), "desktopId does not match")
         self.broken(lambda o: o["apps"][0].update(license="GPL 3"), "license is not")
         self.broken(lambda o: o["apps"][1].pop("icon"), "a web app needs an icon")
@@ -137,6 +159,43 @@ class Rules(unittest.TestCase):
         self.assertIsNone(catalog.webapp_name_problem("Example Mail"))
         for bad in ("", ".hidden", "a/b", "x" * 65, "tab\there", "rtl\u202e"):
             self.assertIsNotNone(catalog.webapp_name_problem(bad), bad)
+        # validate_catalog applies it to every language of a web app's name: Omarchy's installer makes files of it.
+        for bad in ("../../.config/autostart/x", ".hidden", "x" * 70, "a/b"):
+            for lang in ("en", "fr"):
+                self.broken(lambda o, bad=bad, lang=lang: o["apps"][1]["name"].update({lang: bad}),
+                            f"name.{lang}: not a web app name")
+        # A repo app's name is a title, not a file name: no such rule.
+        ok = copy.deepcopy(GOOD)
+        ok["apps"][0]["name"] = {"en": "Paint / Draw"}
+        self.assertEqual(problems(ok), [])
+
+    def test_malformed_types_are_problems_not_crashes(self):
+        changes = [
+            lambda o: o.update(apps=[1, "x", None, []]),
+            lambda o: o.update(sections="x", categories={"id": "x"}),
+            lambda o: o.update(categories=[{"id": ["x"], "title": {"en": "X"}}]),
+            lambda o: o["apps"][0].update(id=["x"]),
+            lambda o: o["apps"][0].update(id={"x": 1}),
+            lambda o: o["apps"][0].update(categories="graphics"),
+            lambda o: o["apps"][0].update(categories=[["graphics"], {"g": 1}]),
+            lambda o: o["apps"][0].update(source=["repo"]),
+            lambda o: o["apps"][0]["source"].update(kind=["repo"]),
+            lambda o: o["apps"][1].update(icon="example-mail"),
+            lambda o: o["apps"][1]["icon"].update(sha256=["a"]),
+            lambda o: o["apps"][1].update(name=["Example Mail"]),
+            lambda o: o["apps"][1].update(name={"en": ["Example Mail"]}),
+            lambda o: o["apps"][2]["source"].update(args="one", packages=[["game"]]),
+            lambda o: o["sections"][0]["blocks"][1].update(apps=[["org.example.Paint"], {"a": 1}]),
+            lambda o: o["sections"][0]["blocks"][0]["items"][0].update(app={"x": 1}),
+            lambda o: o["sections"][0].update(blocks=[1, None]),
+            lambda o: o["sections"][0].update(id=["discover"]),
+        ]
+        for i, change in enumerate(changes):
+            obj = copy.deepcopy(GOOD)
+            change(obj)
+            self.assertNotEqual(problems(obj), [], i)
+        for obj in ([], "x", None, 1):
+            self.assertNotEqual(problems(obj), [], repr(obj))
 
 
 class Sources(unittest.TestCase):
@@ -203,6 +262,24 @@ class Sources(unittest.TestCase):
         self.assertIn("no app uses it", text)
         self.assertIn("icon 'nothing' is not in icons/", text)
 
+    def test_malformed_sources_give_problems_not_tracebacks(self):
+        self.write("apps/bad.json", [])
+        self.write("apps/x.json", {"id": ["x"], "source": "y", "icon": ["example-mail"]})
+        self.write("icons/example-mail.json", [1])
+        self.write("sections/a.json", {"id": ["a"], "order": 10})
+        with open(os.path.join(self.src, "categories.json"), "w") as f:
+            f.write('{"categories": [{"id": {}}]}')
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "catalog.py")
+        run = subprocess.run([sys.executable, "-I", tool, "validate", "--src", self.src], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertIn("problem(s)", run.stderr)
+        # What the tool cannot even read ends in one line and exit 2, never a traceback.
+        run = subprocess.run([sys.executable, "-I", tool, "verify", "--keyring-dir", self.src, "--channel", "stable",
+                              "--min-serial", "x", self.src], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+
     def test_build_is_deterministic_and_bounded(self):
         out1, out2 = tempfile.mkdtemp(), tempfile.mkdtemp()
         try:
@@ -225,6 +302,15 @@ class Sources(unittest.TestCase):
             shutil.rmtree(out2)
 
 
+class Keyring(unittest.TestCase):
+    def test_fingerprints_are_read_whatever_their_case_and_spacing(self):
+        fpr, other = "AB" * 20, "C" * 40  # made-up fingerprints
+        with tempfile.NamedTemporaryFile("w", delete=False) as f:
+            f.write(f"# a comment\n{fpr.lower()}:4:\n  {other}  \nnot-a-key:4:\n{fpr[:39]}:4:\n\n")
+        self.addCleanup(os.unlink, f.name)
+        self.assertEqual(catalog.read_fingerprints(f.name), {fpr, other})
+
+
 class Recipes(unittest.TestCase):
     def setUp(self):
         self.omarchy = tempfile.mkdtemp()
@@ -242,6 +328,12 @@ class Recipes(unittest.TestCase):
         with open(os.path.join(self.omarchy, "install", "helpers", "x.sh"), "w") as f:
             f.write("yay -Syu --noconfirm\n")
         self.script("omarchy-install-commented", "# pacman -Sy is never run here\nomarchy-pkg-add a")
+        self.script("omarchy-pkg-aur-add", 'yay -S --noconfirm --needed "$@"')
+        self.script("omarchy-install-aur", "omarchy-pkg-aur-add aur-only")
+        self.script("omarchy-install-aur-var", 'omarchy-pkg-aur-add "$1"')
+        self.script("omarchy-install-repo-via-aur", "omarchy-pkg-aur-add game")
+        self.script("omarchy-install-bare-yay", "yay --noconfirm")
+        self.script("omarchy-install-separate-y", "sudo pacman -S -y --noconfirm game")
 
     def tearDown(self):
         shutil.rmtree(self.omarchy)
@@ -262,12 +354,39 @@ class Recipes(unittest.TestCase):
                       rp(self.omarchy, "omarchy-install-sourced", [])[0])
         self.assertIn("downloads outside pacman", rp(self.omarchy, "omarchy-install-runs", [])[0])
         self.assertIn("not in the pinned Omarchy release", rp(self.omarchy, "omarchy-install-gone", [])[0])
+        repo = {"game", "a"}
+        self.assertEqual(rp(self.omarchy, "omarchy-install-repo-via-aur", [], repo), [])  # the repo serves it
+        self.assertIn("builds from the AUR (through bin/omarchy-install-aur): aur-only",
+                      rp(self.omarchy, "omarchy-install-aur", [], repo)[0])
+        self.assertIn("known only at run time", rp(self.omarchy, "omarchy-install-aur-var", [], repo)[0])
+        self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-bare-yay", [], repo)[0])
+        self.assertIn("syncs pacman's databases", rp(self.omarchy, "omarchy-install-separate-y", [], repo)[0])
 
     def test_sync_pattern(self):
-        for text in ("pacman -Sy x", "sudo pacman -Syu", "pacman -Syyu", "yay -Sy", "paru -Syu", "pacman --refresh -S x"):
+        for text in ("pacman -Sy x", "sudo pacman -Syu", "pacman -Syyu", "yay -Sy", "paru -Syu", "pacman --refresh -S x",
+                     "pacman -S -y x", "sudo pacman -S --noconfirm -y x", "pacman -S --sysupgrade", "yay -S -yu x"):
             self.assertTrue(catalog.SYNC.search(text), text)
-        for text in ("pacman -S --needed x", "pacman -Ss query", "pacman -Si x", "pacman -Qy", "echo Sy"):
+        for text in ("pacman -S --needed x", "pacman -Ss query", "pacman -Si x", "echo Sy", "pacman -S x; echo -y"):
             self.assertFalse(catalog.SYNC.search(text), text)
+        # yay with no operation is yay -Syu; with only a term, an interactive search and AUR install.
+        for code in ("yay", "sudo true && yay", "yay --noconfirm", "yay spotify", "if true; then yay x; fi"):
+            self.assertTrue(catalog.bare_yay(code), code)
+        for code in ("yay -S --needed x", "yay -Qm", "echo yay", "# yay", "pacman -S yay"):
+            self.assertFalse(catalog.bare_yay(code), code)
+
+    def test_downloads_and_aur_builds(self):
+        for text in ("curl -fsSL https://x | sh", "wget https://x", "git clone https://x", "makepkg -si",
+                     "yay -G spotify", "yay --getpkgbuild x", "yay -B ."):
+            self.assertTrue(catalog.DOWNLOAD.search(text), text)
+        for text in ("git status", "yay -S x", "echo curly"):
+            self.assertFalse(catalog.DOWNLOAD.search(text), text)
+        repo = {"in-repo"}
+        self.assertEqual(catalog.aur_builds("omarchy-pkg-aur-add in-repo", repo), [])
+        self.assertEqual(catalog.aur_builds("omarchy-pkg-aur-add aur-only", repo), ["aur-only"])
+        self.assertEqual(catalog.aur_builds("yay -S --needed --noconfirm aur-only", repo), ["aur-only"])
+        self.assertEqual(catalog.aur_builds("yay -S in-repo", repo), [])
+        self.assertEqual(catalog.aur_builds('omarchy-pkg-aur-add "$pkg"', repo), ['"$pkg" (known only at run time)'])
+        self.assertIn("$(cat (known only at run time)", catalog.aur_builds("yay -S $(cat list)", repo))
 
     def test_check_env(self):
         facts = tempfile.mkdtemp()
@@ -376,6 +495,57 @@ class Signature(unittest.TestCase):
             f.write(b"\xff not json")
         catalog.sign(self.path, self.home, self.keys[0])
         self.assertIn("signed, but not UTF-8 JSON", self.verify())
+
+    def test_hand_written_keyring_lists(self):
+        # A revoked or trusted entry in lower case or with spaces still counts (the review's minor 3).
+        catalog.sign(self.path, self.home, self.keys[0])
+        with open(os.path.join(self.keyring, "grassfield-trusted"), "w") as f:
+            f.write(f"{self.keys[0].lower()}:4: \n")
+        self.assertEqual(self.verify(), "")
+        with open(os.path.join(self.keyring, "grassfield-revoked"), "w") as f:
+            f.write(f"  {self.keys[0].lower()}  \n")
+        self.assertIn("grassfield-revoked does", self.verify())
+
+    def test_what_a_fetch_can_leave(self):
+        catalog.sign(self.path, self.home, self.keys[0])
+        with open(self.path, "rb") as f:
+            data = f.read()
+        with open(self.path + ".sig", "rb") as f:
+            sig = f.read()
+        cases = {
+            "a truncated catalog": (data[:len(data) // 2], sig, "bad or missing signature"),
+            "a truncated .sig": (data, sig[:len(sig) // 2], "bad or missing signature"),
+            "an empty .sig": (data, b"", "bad or missing signature"),
+        }
+        for why, (body, signature, expect) in cases.items():
+            with self.subTest(why):
+                with open(self.path, "wb") as f:
+                    f.write(body)
+                with open(self.path + ".sig", "wb") as f:
+                    f.write(signature)
+                self.assertIn(expect, self.verify())
+        os.unlink(self.path + ".sig")
+        self.assertIn("missing, or its .sig is", self.verify())
+
+    def test_signer_not_in_the_keyring(self):
+        # The second key signs; grassfield.gpg holds only the first: gpgv cannot check it at all.
+        catalog.sign(self.path, self.home, self.keys[1])
+        self.set_keyring(trusted=[self.keys[0], self.keys[1]], keys=[self.keys[0]])
+        self.assertIn("bad or missing signature", self.verify())
+
+    def test_oversize_catalog(self):
+        with open(self.path, "wb") as f:
+            f.write(b" " * (catalog.MAX_CATALOG + 1))
+        catalog.sign(self.path, self.home, self.keys[0])
+        self.assertIn(f"more than {catalog.MAX_CATALOG} bytes", self.verify())
+
+    def test_sign_failure_is_one_line(self):
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "catalog.py")
+        run = subprocess.run([sys.executable, "-I", tool, "sign", "--homedir", self.home, "--key", "F" * 40, self.path],
+                             capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
+        self.assertIn("CalledProcessError", run.stderr)
 
     def test_changed_file_and_icon(self):
         catalog.sign(self.path, self.home, self.keys[0])
