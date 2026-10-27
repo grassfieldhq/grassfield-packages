@@ -1,0 +1,51 @@
+# The Grassfield Store catalog
+
+What Grassfield edits for Grassfield Store: the Discover section, the categories, and our short texts. The format, the
+rules and how the Store checks it are grassfieldhq/grassfield `docs/decisions/ADR-0037-store.md` section g. CI builds one
+`grassfield-catalog.v1.json` per channel from these files, signs it, and keeps it as an artifact. Nothing is published
+until the owner decides (CLAUDE.md).
+
+## Layout
+| Path | What |
+|---|---|
+| `categories.json` | `{"categories": [...]}`: id, title, symbol, the freedesktop categories each one gathers (at most 32) |
+| `sections/<id>.json` | one section each, with `"order"` (an integer, sorted ascending, dropped by the build); `discover` comes first (at most 8 sections, 12 blocks each) |
+| `apps/<id>.json` | one app each, the file named after its id; the id is the app's AppStream id when it has one, spelled exactly as AppStream spells it (CI checks it) |
+| `icons/<name>.png`, `icons/<name>.json` | an icon for an app with no metadata, and its `{"license", "origin", "review": "needs legal review"}` |
+| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version) |
+
+## Adding an app
+1. Pick its source, in this order when it has several: an Omarchy setup (it configures what Omarchy configures), an Arch or
+   `[omarchy]` package, Flathub, the AUR.
+2. Write `apps/<id>.json`:
+   - a package: `{"id": "org.gimp.GIMP", "source": {"kind": "repo", "repo": "extra", "package": "gimp"},
+     "categories": ["graphics"]}`. Only packages that own an application entry (`/usr/share/applications/*.desktop`): the
+     Store can then remove whatever it installs (ADR-0037 SD1).
+   - an Omarchy setup: `install` and `remove` recipes (`omarchy-install-…`, `omarchy-remove-…`), their arguments, the
+     `packages` that say it is installed, `changes` (what the recipe does, in plain words, written after reading it) and
+     `removes` (the user data its removal deletes, when it deletes any). Recipes that sync pacman's databases or download
+     code are refused.
+   - an app without AppStream metadata (most `[omarchy]` packages, web apps): `name`, `summary`, `developer`, `license`,
+     `homepage`, and `desktopId` when the package has several entries.
+3. Put it in a section or a category, then run the checks below.
+
+## Texts
+- Our own words, plain text: no markup, no links, no control or bidirectional characters. English (`en`) is required,
+  French (`fr`) expected; v1 reads no other language.
+- Lengths in characters: section and category titles 40, eyebrows 40, titles and names 80, texts and summaries 200,
+  descriptions 4000. Line breaks only in texts, summaries and descriptions.
+- Never Apple's names ("App Store", "Arcade"), editorial texts or assets. The section and category names, and the
+  publishers' icons, need legal review before any publication (ADR-0037 e.10, owner decision ST10).
+
+## Checks
+```sh
+python3 -I tools/catalog.py validate                    # the format, offline
+tests/run-in-container.sh                               # the unit tests, with throwaway keys, in a container
+# The facts, in a throwaway Arch container with an Omarchy checkout at the pinned commit:
+docker run --rm -v "$PWD":/src:ro -v <omarchy>:/omarchy:ro -v /tmp/facts:/out archlinux:base \
+  bash -c 'pacman -Syu --noconfirm git >/dev/null && git config --global --add safe.directory /omarchy &&
+           bash /src/tools/catalog-facts.sh /omarchy /src/catalog /out'
+python3 -I tools/catalog.py check-env --facts /tmp/facts --omarchy <omarchy>
+```
+CI (`.github/workflows/catalog.yml`) runs all of them, then builds both channels, signs them with a throwaway key made in
+its container, verifies them as the Store does, and keeps the result as an artifact for 7 days.

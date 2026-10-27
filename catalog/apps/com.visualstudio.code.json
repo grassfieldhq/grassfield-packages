@@ -1,0 +1,11 @@
+{
+  "id": "com.visualstudio.code",
+  "source": {"kind": "repo", "repo": "omarchy", "package": "visual-studio-code-bin"},
+  "name": {"en": "Visual Studio Code"},
+  "summary": {"en": "A code editor with debugging, Git and extensions.", "fr": "Un éditeur de code avec débogage, Git et extensions."},
+  "developer": {"en": "Microsoft"},
+  "license": "LicenseRef-proprietary",
+  "homepage": "https://code.visualstudio.com/",
+  "desktopId": "com.microsoft.VSCode.desktop",
+  "categories": ["developer-tools"]
+}

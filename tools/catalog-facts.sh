@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Facts for `catalog.py check-env`, read from the system the catalog names (ADR-0037 g "CI also refuses"): the packages of
+# Omarchy's stable mirror, the application entries of the packages the catalog names, Arch's AppStream ids and, when the
+# catalog lists a Flatpak, Flathub's app ids. Everything read is data.
+#
+# Runs ONLY as root inside a throwaway Arch container (it rewrites pacman's configuration and syncs it), e.g.:
+#   docker run --rm -v "$PWD":/src:ro -v <omarchy checkout>:/omarchy:ro -v <out>:/out \
+#     archlinux:base bash /src/tools/catalog-facts.sh /omarchy /src/catalog /out
+set -euo pipefail
+
+if [[ ! -f /.dockerenv && ! -f /run/.containerenv ]] || [[ $(id -u) != 0 ]]; then
+  echo "catalog-facts.sh: refused: run as root inside a throwaway container" >&2
+  exit 2
+fi
+[[ $# == 3 ]] || { echo "usage: catalog-facts.sh <omarchy checkout> <catalog dir> <out dir>" >&2; exit 2; }
+omarchy=$1 src=$2 out=$3
+tool=$(dirname "$(readlink -f "$0")")/catalog.py
+
+# The Omarchy release the catalog is checked against must be the pinned one.
+want=$(awk '$1 == "commit" {print $2}' "$src/omarchy.lock")
+have=$(git -C "$omarchy" rev-parse HEAD 2>/dev/null || cat "$omarchy/.commit" 2>/dev/null || true)
+if [[ -z $want || $have != "$want" ]]; then
+  echo "catalog-facts.sh: $omarchy is at '${have:-unknown}', catalog/omarchy.lock pins '$want'" >&2
+  exit 2
+fi
+
+# Exactly Omarchy's stable pacman configuration; Docker has no Landlock for pacman's download sandbox (as ADR-0033's probes).
+cp "$omarchy/default/pacman/pacman-stable.conf" /etc/pacman.conf
+cp "$omarchy/default/pacman/mirrorlist-stable" /etc/pacman.d/mirrorlist
+sed -i 's/^DownloadUser = alpm$/DownloadUser = alpm\nDisableSandbox/' /etc/pacman.conf
+pacman-key --init >/dev/null 2>&1
+pacman-key --populate archlinux >/dev/null 2>&1
+# A whole upgrade, never -Sy alone, even in a throwaway container: python and libarchive come from the same snapshot.
+pacman -Syu --noconfirm --needed python libarchive >/dev/null
+pacman -Fy >/dev/null
+
+mkdir -p "$out"
+{
+  echo "# pacman -Sl on Omarchy's stable configuration: repository, package, version"
+  pacman -Sl | awk '{print $1, $2, $3}'
+} >"$out/repo-packages.txt"
+
+mapfile -t wanted < <(python3 -I "$tool" packages --src "$src")
+{
+  echo "# pacman -Fl of the packages the catalog names: application entries only"
+  if ((${#wanted[@]})); then
+    # A name pacman does not know makes -Fl exit 1; check-env reports it from repo-packages.txt.
+    { pacman -Fl "${wanted[@]}" 2>/dev/null || true; } | awk '$2 ~ /^usr\/share\/applications\/[^\/]+\.desktop$/ {print $1, "/" $2}'
+  fi
+} >"$out/app-entries.txt"
+
+# Arch's AppStream: the package file and its signature from pacman's own mirror, checked by pacman's keyring and rule.
+cache=$(mktemp -d)
+url=$(pacman -Sp archlinux-appstream-data | tail -1)
+pkg=$cache/$(basename "$url")
+curl -fsS --max-time 300 -o "$pkg" "$url"
+curl -fsS --max-time 60 -o "$pkg.sig" "$url.sig"
+pacman-key --verify "$pkg.sig" "$pkg" >/dev/null 2>&1 || { echo "catalog-facts.sh: $(basename "$pkg"): bad signature" >&2; exit 1; }
+{
+  echo "# $(basename "$pkg"): package, AppStream id, component type"
+  for xml in $(bsdtar -tf "$pkg" | grep -E '^usr/share/swcatalog/xml/[^/]+\.xml\.gz$'); do
+    bsdtar -xOf "$pkg" "$xml" | gzip -dc | python3 -I -c '
+import sys, xml.etree.ElementTree as ET
+for _, el in ET.iterparse(sys.stdin.buffer):
+    if el.tag == "component":
+        cid, pkg = el.findtext("id"), el.findtext("pkgname")
+        if cid and pkg:
+            print(pkg.strip(), cid.strip(), el.get("type", "generic"))
+        el.clear()
+'
+  done | sort -u
+} >"$out/appstream-ids.txt"
+rm -rf "$cache"
+
+# Flathub, only when the catalog lists a Flatpak: the ids of its AppStream.
+if grep -qs '"kind": *"flatpak"' "$src"/apps/*.json; then
+  {
+    echo "# Flathub's AppStream (dl.flathub.org): app ids"
+    curl -fsS --max-time 300 https://dl.flathub.org/repo/appstream/x86_64/appstream.xml.gz | gzip -dc | python3 -I -c '
+import sys, xml.etree.ElementTree as ET
+for _, el in ET.iterparse(sys.stdin.buffer):
+    if el.tag == "component":
+        cid = el.findtext("id")
+        if cid:
+            print(cid.strip().removesuffix(".desktop"))
+        el.clear()
+' | sort -u
+  } >"$out/flathub-ids.txt"
+fi
+
+echo "catalog-facts.sh: $(grep -vc '^#' "$out/repo-packages.txt") packages, $(grep -vc '^#' "$out/app-entries.txt") entries, $(grep -vc '^#' "$out/appstream-ids.txt") AppStream components"

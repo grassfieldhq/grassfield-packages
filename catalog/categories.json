@@ -1,0 +1,22 @@
+{
+  "categories": [
+    {"id": "productivity", "title": {"en": "Productivity", "fr": "Productivité"}, "symbol": "category-productivity",
+     "freedesktop": ["Office", "WordProcessor", "Spreadsheet", "Presentation", "Calendar", "ContactManagement", "ProjectManagement"]},
+    {"id": "graphics", "title": {"en": "Graphics & Design", "fr": "Graphisme et design"}, "symbol": "category-graphics",
+     "freedesktop": ["Graphics", "2DGraphics", "VectorGraphics", "RasterGraphics", "3DGraphics", "Photography"]},
+    {"id": "photo-video", "title": {"en": "Photo & Video", "fr": "Photo et vidéo"}, "symbol": "category-photo-video",
+     "freedesktop": ["Video", "AudioVideoEditing", "Player", "TV"]},
+    {"id": "music-audio", "title": {"en": "Music & Audio", "fr": "Musique et audio"}, "symbol": "category-music-audio",
+     "freedesktop": ["Audio", "Music", "Midi", "Mixer", "Sequencer"]},
+    {"id": "developer-tools", "title": {"en": "Developer Tools", "fr": "Outils de développement"}, "symbol": "category-developer-tools",
+     "freedesktop": ["Development", "IDE", "TextEditor", "Debugger", "RevisionControl"]},
+    {"id": "games", "title": {"en": "Games", "fr": "Jeux"}, "symbol": "category-games",
+     "freedesktop": ["Game"]},
+    {"id": "internet", "title": {"en": "Internet", "fr": "Internet"}, "symbol": "category-internet",
+     "freedesktop": ["Network", "WebBrowser", "Email", "Chat", "InstantMessaging", "FileTransfer"]},
+    {"id": "education", "title": {"en": "Education", "fr": "Éducation"}, "symbol": "category-education",
+     "freedesktop": ["Education", "Science", "Math", "Languages"]},
+    {"id": "utilities", "title": {"en": "Utilities", "fr": "Utilitaires"}, "symbol": "category-utilities",
+     "freedesktop": ["Utility", "System", "Accessibility", "Archiving", "Compression", "FileTools"]}
+  ]
+}

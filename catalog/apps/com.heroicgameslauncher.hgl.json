@@ -1,0 +1,23 @@
+{
+  "id": "com.heroicgameslauncher.hgl",
+  "source": {
+    "kind": "omarchy-setup",
+    "install": "omarchy-install-gaming-heroic",
+    "remove": "omarchy-remove-gaming-heroic",
+    "packages": ["heroic-games-launcher-bin"],
+    "changes": {
+      "en": "Installs Heroic and the 32-bit graphics drivers for your graphics card, then opens Heroic.",
+      "fr": "Installe Heroic et les pilotes graphiques 32 bits de votre carte graphique, puis ouvre Heroic."
+    },
+    "removes": {
+      "en": "Heroic's folders in your home folder, with the games in Games/Heroic.",
+      "fr": "Les dossiers de Heroic dans votre dossier personnel, avec les jeux de Games/Heroic."
+    }
+  },
+  "name": {"en": "Heroic Games Launcher"},
+  "summary": {"en": "Play your Epic, GOG and Amazon games on Linux.", "fr": "Jouez à vos jeux Epic, GOG et Amazon sous Linux."},
+  "developer": {"en": "Heroic Games Launcher contributors", "fr": "Les contributeurs de Heroic Games Launcher"},
+  "license": "GPL-3.0-only",
+  "homepage": "https://heroicgameslauncher.com/",
+  "categories": ["games"]
+}
