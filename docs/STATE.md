@@ -74,9 +74,14 @@ Last updated: 2026-10-27
   - A deeply nested JSON file is a one-line problem (RecursionError), never a traceback.
   - `publish.yml` and STATE name the owner's step: create and protect the `publish-<channel>` environments before
     `if: false` is removed (GitHub creates a missing one unprotected).
+  - Parity with grassfield PR #21's review: a `.sig` that is a signed message of its own (PLAINTEXT) is refused;
+    `catalog-facts.sh` checks Arch's AppStream package with gpg on a copy of pacman's keyring (one good detached signature,
+    TRUST_FULLY or TRUST_ULTIMATE, the key not disabled) instead of `pacman-key --verify`, whose exit code is 0 for any key
+    of the keyring, trusted or not (grassfield ADR-0037 S19). Arch's real package passes it (1604 components read).
 
 ## Tests run
-- Step 1 follow-up: `tests/run-in-container.sh --network host`: `Ran 46 tests … OK`, exit 0, nothing skipped. The CI
+- Step 1 follow-up: `tests/run-in-container.sh --network host`: `Ran 46 tests … OK`, exit 0, nothing skipped (47 with the
+  parity commit, in the CI replay). The CI
   check job replayed in a throwaway container: docker exit 0 (`validate: ok`, `check-env: ok`, both channels built,
   signed with a throwaway key and verified).
 - Step 1 review fixes: `tests/run-in-container.sh --network host` (throwaway archlinux:base container): `Ran 40 tests … OK`,

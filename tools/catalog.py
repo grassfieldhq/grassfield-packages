@@ -852,14 +852,16 @@ def signature_problem(path, keyring_dir):
         run = subprocess.run(["gpgv", "--homedir", home, "--keyring", keyring, "--status-fd", "1",
                               path + ".sig", path], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                              env=child_env(home))
-    signers = set()
+    signers, plaintext = set(), False
     for line in run.stdout.splitlines():
         fields = line.split()
+        plaintext = plaintext or fields[:2] == ["[GNUPG:]", "PLAINTEXT"]
         if fields[:2] == ["[GNUPG:]", "VALIDSIG"]:
             # VALIDSIG's argument 10: the primary key's fingerprint; a short line counts as an unreadable signer.
             signers.add(fields[11].upper() if len(fields) >= 12 else "")
-    if run.returncode != 0 or not signers:
-        return f"bad or missing signature (gpgv exit {run.returncode})"
+    if run.returncode != 0 or not signers or plaintext:
+        # PLAINTEXT: the .sig is a signed message of its own, never the detached signature of this file.
+        return f"bad or missing signature (gpgv exit {run.returncode}{', a signed message, not a detached signature' if plaintext else ''})"
     if len(signers) > 1:
         return "signatures by more than one key: which one vouches for it is unknown (as the Store, refused)"
     signer = signers.pop()

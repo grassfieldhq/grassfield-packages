@@ -583,6 +583,13 @@ class Signature(unittest.TestCase):
         self.set_keyring(trusted=self.keys)
         self.assertIn("signatures by more than one key", self.verify())
 
+    def test_a_signed_message_is_not_a_signature(self):
+        # The catalog signed as a message of its own (gpg --sign), given as its .sig: refused.
+        subprocess.run(["gpg", "--batch", "--no-tty", "--yes", "--homedir", self.home, "--local-user", self.keys[0] + "!",
+                        "--sign", "--output", self.path + ".sig", self.path],
+                       check=True, env=catalog.child_env(self.home), capture_output=True)
+        self.assertIn("bad or missing signature", self.verify())
+
     def test_unreadable_revoked_list_refuses_everything(self):
         catalog.sign(self.path, self.home, self.keys[0])
         with open(os.path.join(self.keyring, "grassfield-revoked"), "w") as f:
