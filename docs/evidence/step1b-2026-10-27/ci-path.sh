@@ -99,8 +99,10 @@ release_job rc2
 publish rc2
 expect "the published grassfield-keyring kept its bytes" \
   test "$(sha256sum "$store"/beta/x86_64/grassfield-keyring-*.pkg.tar.zst | awk '{print $1}')" == "$k1"
-expect "the checker: 1.0.0rc1-3 -> 1.0.0rc2-3, its notes verified ($(check))" \
-  test "$(check | cut -d' ' -f1-5)" == "available 1.0.0rc1-3 1.0.0rc2-3 None 1"
+# This build's base is https (main's repository.conf): the client fetches notes over https only, so the file:// view's
+# notes are not fetched; tests/e2e.sh verifies them with releases whose base is file://.
+expect "the checker: 1.0.0rc1-3 -> 1.0.0rc2-3 offered; notes over https only, so none from this file:// view ($(check))" \
+  test "$(check | cut -d' ' -f1-5)" == "available 1.0.0rc1-3 1.0.0rc2-3 unavailable 0"
 pacman -Syu --noconfirm >>/tmp/client.log 2>&1; r_=$?
 expect "pacman -Syu -> exit 0, installs 1.0.0rc2-3, all three together" \
   test "$r_:$(pacman -Q grassfield-desktop grassfield-compositor grassfield-icons | awk '{print $2}' | sort -u)" == "0:1.0.0rc2-3"
