@@ -1,0 +1,94 @@
+{
+  "order": 40,
+  "id": "play",
+  "title": {
+    "en": "Play",
+    "fr": "Jouer"
+  },
+  "symbol": "play",
+  "blocks": [
+    {
+      "kind": "hero",
+      "items": [
+        {
+          "app": "com.valvesoftware.Steam.desktop",
+          "eyebrow": {
+            "en": "Games",
+            "fr": "Jeux"
+          },
+          "title": {
+            "en": "Your game library",
+            "fr": "Votre bibliothèque de jeux"
+          },
+          "text": {
+            "en": "Install Steam with the drivers its games need, in one step.",
+            "fr": "Installez Steam avec les pilotes dont ses jeux ont besoin, en une seule étape."
+          }
+        },
+        {
+          "app": "com.play0ad.zeroad",
+          "eyebrow": {
+            "en": "Strategy",
+            "fr": "Stratégie"
+          },
+          "title": {
+            "en": "Build an ancient empire",
+            "fr": "Bâtissez un empire antique"
+          },
+          "text": {
+            "en": "Gather, build and lead armies across history, alone or with friends.",
+            "fr": "Récoltez, bâtissez et menez des armées à travers l'histoire, seul ou entre amis."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "cards",
+      "items": [
+        {
+          "app": "net.supertuxkart.SuperTuxKart",
+          "eyebrow": {
+            "en": "Racing",
+            "fr": "Course"
+          },
+          "title": {
+            "en": "Karts, tracks and friends",
+            "fr": "Des karts, des circuits et des amis"
+          },
+          "text": {
+            "en": "Race on your own or split the screen with family.",
+            "fr": "Courez seul ou partagez l'écran en famille."
+          }
+        },
+        {
+          "app": "com.heroicgameslauncher.hgl",
+          "eyebrow": {
+            "en": "Launchers",
+            "fr": "Lanceurs"
+          },
+          "title": {
+            "en": "Your other game stores",
+            "fr": "Vos autres boutiques de jeux"
+          },
+          "text": {
+            "en": "Play the games you own on Epic, GOG and Amazon.",
+            "fr": "Jouez aux jeux que vous possédez sur Epic, GOG et Amazon."
+          }
+        }
+      ]
+    },
+    {
+      "kind": "row",
+      "title": {
+        "en": "Games to start with",
+        "fr": "Des jeux pour commencer"
+      },
+      "apps": [
+        "com.valvesoftware.Steam.desktop",
+        "com.heroicgameslauncher.hgl",
+        "com.play0ad.zeroad",
+        "net.supertuxkart.SuperTuxKart"
+      ]
+    }
+  ]
+}
