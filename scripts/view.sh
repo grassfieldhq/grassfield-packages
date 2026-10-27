@@ -5,7 +5,7 @@
 #
 # VIEW/<channel>/x86_64/ gets the channel's packages and their signatures, and the current snapshot's files under their
 # fixed names (grassfield.db, grassfield.files, grassfield-notes.json, the catalog when there is one, and their .sig), as
-# real files. The pointer is {"snapshot": "<id>"} (scripts/snapshot.py). The new view is made beside VIEW and swapped in
+# real files. The pointer is {"snapshot": "<id>"} (tools/publish.py). The new view is made beside VIEW and swapped in
 # with one rename per channel, so a client never reads half of it.
 set -euo pipefail
 [[ $# == 2 && -d $1 ]] || { echo "usage: view.sh TREE VIEW" >&2; exit 2; }

@@ -28,8 +28,8 @@
 #                                            their .sig, and grassfield.db, grassfield.files and grassfield-notes.json with
 #                                            their .sig, a database of this release alone (the publisher takes it as is)
 #   <channel>/x86_64/                        the channel as the hosting serves it (ADR-0033 g, h.2), for CI's artifacts
-#                                            and the tests, made from the release builds as the publisher makes it, in
-#                                            its format (scripts/snapshot.py; tools/publish.py once PR #2 is merged):
+#                                            and the tests, made from the release builds by the channel's one publisher
+#                                            (tools/publish.py, ADR-0037 g) in its local store:
 #     <package>.pkg.tar.zst and .sig           immutable names: a file name never changes content
 #     snap/<id>/grassfield.db, .files,         never a package older than the current snapshot's; the current
 #       grassfield-notes.json, each with .sig, snapshot's other files kept (the catalog)
@@ -195,41 +195,13 @@ release_build() { # channel -> releases/<channel>/<packages version>/, a databas
   echo "$c: release build $full ($(python3 -I -c 'import json, sys; print(" ".join(r["version"] for r in json.load(open(sys.argv[1]))["releases"]))' "$out/grassfield-notes.json") in its notes)"
 }
 
-versions() { # database -> "name version" lines
-  bsdtar -xOf "$1" 2>/dev/null | awk '/^%NAME%$/ { getline n } /^%VERSION%$/ { getline v; print n, v }'
-}
-
-publish() { # channel: a new snapshot of the tree from the release build, as the channel's publisher makes one
-  local c=$1 dir=$tree/$1/x86_64 rel=$tree/releases/$1/$full prev cur id f b name was now
-  mkdir -p "$dir/snap"
-  prev=$(python3 -I "$here/scripts/snapshot.py" current "$dir") || die "$dir/pointer is not a pointer"
-  [[ -z $prev || -d $dir/snap/$prev ]] || die "$dir/pointer names a missing snapshot ($prev)"
-  if [[ -n $prev ]]; then
-    cur=$(versions "$dir/snap/$prev/grassfield.db" | awk '$1 == "grassfield-desktop" { print $2 }')
-    if [[ -n $cur ]] && (($(vercmp "$cur" "$full") >= 0)); then
-      echo "$c: already holds grassfield-desktop $cur, not older than $full: unchanged"
-      return 0
-    fi
-    # Never backwards (ADR-0037 g.3): no package older than the current snapshot's.
-    while read -r name was; do
-      now=$(versions "$rel/grassfield.db" | awk -v n="$name" '$1 == n { print $2 }')
-      [[ -z $now ]] || (($(vercmp "$now" "$was") >= 0)) || die "$c: $name $now is older than the current $was"
-    done < <(versions "$dir/snap/$prev/grassfield.db")
-  fi
-  for f in "$rel"/*.pkg.tar.zst; do
-    b=${f##*/}
-    if [[ -e $dir/$b ]]; then
-      cmp -s "$f" "$dir/$b" && cmp -s "$f.sig" "$dir/$b.sig" && continue
-      die "$dir/$b exists with other content: a package file name never changes content (bump the pkgrel)"
-    fi
-    cp "$f" "$f.sig" "$dir/"
-  done
-  # The databases and notes of the release build, every other file of the current snapshot kept (the catalog), the
-  # manifest, then the pointer if it has not moved.
-  id=$(python3 -I "$here/scripts/snapshot.py" write "$dir" --release "$full" --source "$rel" --expect "$prev") ||
-    die "$c: the snapshot (see above)"
-  echo "$c: snapshot $id (grassfield-desktop $full)"
-  updated+=("$c:$id")
+publish() { # channel: the channel's one publisher on this tree (tools/publish.py, ADR-0037 g), from its release builds
+  local c=$1 out rc=0
+  out=$(python3 -I "$here/tools/publish.py" --store "$tree" --channel "$c" --releases "$tree/releases/$c" 2>&1) || rc=$?
+  printf '%s\n' "$out" | sed "s/^/$c: /"
+  ((rc == 0)) || die "$c: tools/publish.py exit $rc"
+  [[ $out =~ snapshot\ ([0-9]{8}T[0-9]{6}Z-[0-9a-f]{12})\ \( ]] && updated+=("$c:${BASH_REMATCH[1]}")
+  return 0
 }
 
 step "the release builds"
