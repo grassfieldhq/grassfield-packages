@@ -2,7 +2,7 @@
 """The one publisher of a channel (grassfield ADR-0033 h.2 as amended by ADR-0037 g). Written and disabled: CI never runs it
 until the owner decides, after the M5 legal review (CLAUDE.md). Standard library, plus pacman's `vercmp` and `bsdtar`.
 
-  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR [--catalog DIR --keyring-dir DIR]
+  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR --keyring-dir DIR [--catalog DIR]
              [--keep-days 7]
 
 One run publishes the latest state, never what started it (GitHub cancels a waiting run when a newer one queues, and each
@@ -10,9 +10,10 @@ tag is built once): the newest release built and signed for the channel (--relea
 tag's build left it) and the catalog built from main's head (--catalog). It
   1. reads the pointer and the current snapshot's manifest;
   2. builds the new snapshot from it: the newest release when it is newer than the snapshot's, the catalog when its content
-     differs (serial and build time aside) and its serial is higher, the rest kept; nothing new, nothing written. The
-     catalog must first pass the Store's own checks for this channel (tools/catalog.py verify: a trusted signature, the
-     rules, the icons); only the icons it lists are uploaded;
+     differs (serial and build time aside) and its serial is higher, the rest kept; nothing new, nothing written. Every
+     file of the release (databases, notes, packages) must be signed by one key grassfield-trusted lists and
+     grassfield-revoked does not, and the catalog must pass the Store's own checks for this channel (tools/catalog.py
+     verify: that signature, the rules, the icons); only the icons it lists are uploaded;
   3. refuses to go backwards: a grassfield.db naming an older version of a package than the current one, an older release
      or a lower serial are never published (a rollback is a new release, ADR-0033 h.2);
   4. uploads the files with immutable names (packages, icons) once, then the snapshot, then writes the pointer only if it
@@ -204,9 +205,14 @@ def plan(store, current, releases, catalog, keyring_dir=None):
                     if name in new_db and vercmp(new_db[name], was) < 0:
                         raise Refused(f"release {version}: grassfield.db has {name} {new_db[name]}, older than the "
                                       f"published {was} (a rollback is a new release with a higher pkgrel)")
+            packages = sorted(f for f in os.listdir(folder) if PACKAGE_FILE.match(f))
+            # Every file the release brings, signed by a key the Store and pacman trust, before anything is uploaded.
+            for name in list(SNAPSHOT_FILES) + [f for f in packages if not f.endswith(".sig")]:
+                problem = catalogtool.signature_problem(os.path.join(folder, name), keyring_dir)
+                if problem:
+                    raise Refused(f"release {version}: {name}: {problem}")
             for name in SNAPSHOT_FILES:
                 files[name], files[name + ".sig"] = os.path.join(folder, name), os.path.join(folder, name + ".sig")
-            packages = sorted(f for f in os.listdir(folder) if PACKAGE_FILE.match(f))
             packages = [(f, os.path.join(folder, f)) for f in packages]
             manifest["release"] = version
             changed.append(f"release {version}")
@@ -283,17 +289,15 @@ def main(argv):
     ap.add_argument("--arch", default="x86_64", choices=("x86_64",))
     ap.add_argument("--releases", help="one folder per built version: grassfield.db, .files, the notes, packages, .sig")
     ap.add_argument("--catalog", help="the catalog built from main's head and signed for this channel")
-    ap.add_argument("--keyring-dir", help="the keyring folder the Store verifies with (grassfield.gpg, grassfield-trusted, "
-                                          "grassfield-revoked): required with --catalog")
+    ap.add_argument("--keyring-dir", required=True,
+                    help="the keyring folder the Store and pacman trust (grassfield.gpg, grassfield-trusted, "
+                         "grassfield-revoked): every release file and the catalog are checked against it")
     ap.add_argument("--keep-days", type=int, default=7)
     args = ap.parse_args(argv)
     for tool in ("vercmp", "bsdtar"):
         if shutil.which(tool) is None:
             print(f"publish: {tool} is missing (pacman, libarchive)", file=sys.stderr)
             return 2
-    if args.catalog and not args.keyring_dir:
-        print("publish: --catalog needs --keyring-dir (the catalog is checked as the Store checks it)", file=sys.stderr)
-        return 2
     store = LocalStore(args.store, args.channel, args.arch)
     try:
         publish(store, args.releases, args.catalog, keyring_dir=args.keyring_dir)
