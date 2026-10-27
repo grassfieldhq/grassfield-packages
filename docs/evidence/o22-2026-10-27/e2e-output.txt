@@ -1,0 +1,485 @@
+$ tests/e2e.sh --grassfield <clone of grassfield> --ref 448a381   (on a git archive of f678b7d; GRASSFIELD_TEST_CA set)
+
+== an Omarchy stable machine (build/pacman.conf) with the tools of this test
+pacman 7.1.0.r9.g54d9411-3 gnupg 2.4.9-3 polkit 128-1 git 2.56.0-1 python 3.14.8-1 
+
+== throwaway keys
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-10-28
+gpg: checking the trustdb
+gpg: marginals needed: 3  completes needed: 1  trust model: pgp
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: next trustdb check due at 2026-10-28
+K D13D65592B31A054315773DC1CA679362C5D57DA
+KR 2451C19F510FD60B1BF76086A8DB12051E9084D1
+
+== the test keyring (keyring/ of this repository with K) and the scratch releases of grassfield
+releases: v1.0.0 v1.0.1 v1.1.0-beta1 (pkgrel 3)
+
+== build 1.0.0 (the real PKGBUILD, Omarchy stable's package set)
+PASS: build-channel.sh 1.0.0 -> exit 0 (906 s)
+   commit 8d3afef0f1bc54f80a8af991a31563523fd75085, VERSION 1.0.0, packages 1.0.0-3, channels stable beta
+   trust anchor: D13D65592B31A054315773DC1CA679362C5D57DA is in grassfield-keyring
+   stable: release build 1.0.0-3 (1.0.0-3 in its notes)
+   beta: release build 1.0.0-3 (1.0.0-3 in its notes)
+   stable: publish: snapshot 20261027T170319Z-f0034d9a4f60 (release 1.0.0-3), was None
+   beta: publish: snapshot 20261027T170320Z-96cb86f58031 (release 1.0.0-3), was None
+   done: stable:20261027T170319Z-f0034d9a4f60 beta:20261027T170320Z-96cb86f58031
+   ref v1.0.0
+   commit 8d3afef0f1bc54f80a8af991a31563523fd75085
+   version 1.0.0
+   packages 1.0.0-3
+   keyring 20261027-2
+   releases stable/1.0.0-3 beta/1.0.0-3
+   snapshots stable:20261027T170319Z-f0034d9a4f60 beta:20261027T170320Z-96cb86f58031
+   signing-key D13D65592B31A054315773DC1CA679362C5D57DA
+   hyprland 0.56.2-4
+   plugin-abi efb50993780079460b0cbed1363e2166a2de1d9f_aq_0.15_hu_0.14_hg_0.5_hc_0.1_hlg_0.6
+   package-set:
+PASS: the release builds the publisher reads: releases/stable/1.0.0-3 and releases/beta/1.0.0-3
+PASS: no symbolic link in the tree
+PASS: stable 20261027T170319Z-f0034d9a4f60: manifest.json names every file with its SHA-256
+PASS: stable 20261027T170319Z-f0034d9a4f60: its grassfield-keyring is /work/keyring's, the whole package
+PASS: stable 20261027T170319Z-f0034d9a4f60: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield.db signed
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield.files signed
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield-notes.json signed
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T170319Z-f0034d9a4f60: every package is named grassfield-*
+PASS: stable 20261027T170319Z-f0034d9a4f60: no package declares replaces=
+PASS: stable 20261027T170319Z-f0034d9a4f60: grassfield-desktop depends on grassfield-keyring
+PASS: stable 20261027T170319Z-f0034d9a4f60: notes valid, newest release 1.0.0-3
+PASS: beta 20261027T170320Z-96cb86f58031: manifest.json names every file with its SHA-256
+PASS: beta 20261027T170320Z-96cb86f58031: its grassfield-keyring is /work/keyring's, the whole package
+PASS: beta 20261027T170320Z-96cb86f58031: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield.db signed
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield.files signed
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield-notes.json signed
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T170320Z-96cb86f58031: every package is named grassfield-*
+PASS: beta 20261027T170320Z-96cb86f58031: no package declares replaces=
+PASS: beta 20261027T170320Z-96cb86f58031: grassfield-desktop depends on grassfield-keyring
+PASS: beta 20261027T170320Z-96cb86f58031: notes valid, newest release 1.0.0-3
+PASS: release build beta/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.0-3: grassfield.db signed
+PASS: release build beta/1.0.0-3: grassfield.files signed
+PASS: release build beta/1.0.0-3: grassfield-notes.json signed
+PASS: release build beta/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.0-3: every package is named grassfield-*
+PASS: release build beta/1.0.0-3: no package declares replaces=
+PASS: release build beta/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.0-3: notes valid, newest release 1.0.0-3
+PASS: release build stable/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.0-3: grassfield.db signed
+PASS: release build stable/1.0.0-3: grassfield.files signed
+PASS: release build stable/1.0.0-3: grassfield-notes.json signed
+PASS: release build stable/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.0-3: every package is named grassfield-*
+PASS: release build stable/1.0.0-3: no package declares replaces=
+PASS: release build stable/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.0-3: notes valid, newest release 1.0.0-3
+check-tree: 0 failure(s)
+PASS: the tree follows the contract (check-tree.sh --trusted: K is in the keyring it ships)
+
+== the user's machine: the first installation (ADR-0033 b.3a), then Set Up through pkexec
+PASS: pacman -S of the three packages from the repository: grassfield-desktop 1.0.0-3, grassfield-keyring Installed as a dependency for another package
+PASS: alice: grassfield-channel-set stable -> exit 0 (b.3a step 5: template, keyring populated, hook linked)
+PASS: the channel is stable; the checker: up-to-date
+
+== A10 1.0.1 published: refused with a rogue signature, seen with its notes, installed
+PASS: build-channel.sh 1.0.1 -> exit 0
+PASS: 1.0.1's stable notes list it and the earlier 1.0.0, from the tags (built once, ADR-0037 g)
+PASS: grassfield-keyring built once: the same file in 1.0.1's release build (1 reuse)
+PASS: no symbolic link in the tree
+PASS: stable 20261027T172048Z-ac07a4972cd2: manifest.json names every file with its SHA-256
+PASS: stable 20261027T172048Z-ac07a4972cd2: its grassfield-keyring is /work/keyring's, the whole package
+PASS: stable 20261027T172048Z-ac07a4972cd2: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield.db signed
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield.files signed
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield-notes.json signed
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T172048Z-ac07a4972cd2: every package is named grassfield-*
+PASS: stable 20261027T172048Z-ac07a4972cd2: no package declares replaces=
+PASS: stable 20261027T172048Z-ac07a4972cd2: grassfield-desktop depends on grassfield-keyring
+PASS: stable 20261027T172048Z-ac07a4972cd2: notes valid, newest release 1.0.1-3
+PASS: beta 20261027T172049Z-fbdb49fe2313: manifest.json names every file with its SHA-256
+PASS: beta 20261027T172049Z-fbdb49fe2313: its grassfield-keyring is /work/keyring's, the whole package
+PASS: beta 20261027T172049Z-fbdb49fe2313: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield.db signed
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield.files signed
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield-notes.json signed
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T172049Z-fbdb49fe2313: every package is named grassfield-*
+PASS: beta 20261027T172049Z-fbdb49fe2313: no package declares replaces=
+PASS: beta 20261027T172049Z-fbdb49fe2313: grassfield-desktop depends on grassfield-keyring
+PASS: beta 20261027T172049Z-fbdb49fe2313: notes valid, newest release 1.0.1-3
+PASS: release build beta/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.0-3: grassfield.db signed
+PASS: release build beta/1.0.0-3: grassfield.files signed
+PASS: release build beta/1.0.0-3: grassfield-notes.json signed
+PASS: release build beta/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.0-3: every package is named grassfield-*
+PASS: release build beta/1.0.0-3: no package declares replaces=
+PASS: release build beta/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.0-3: notes valid, newest release 1.0.0-3
+PASS: release build beta/1.0.1-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.1-3: grassfield.db signed
+PASS: release build beta/1.0.1-3: grassfield.files signed
+PASS: release build beta/1.0.1-3: grassfield-notes.json signed
+PASS: release build beta/1.0.1-3: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.1-3: every package is named grassfield-*
+PASS: release build beta/1.0.1-3: no package declares replaces=
+PASS: release build beta/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.1-3: notes valid, newest release 1.0.1-3
+PASS: release build stable/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.0-3: grassfield.db signed
+PASS: release build stable/1.0.0-3: grassfield.files signed
+PASS: release build stable/1.0.0-3: grassfield-notes.json signed
+PASS: release build stable/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.0-3: every package is named grassfield-*
+PASS: release build stable/1.0.0-3: no package declares replaces=
+PASS: release build stable/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.0-3: notes valid, newest release 1.0.0-3
+PASS: release build stable/1.0.1-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.1-3: grassfield.db signed
+PASS: release build stable/1.0.1-3: grassfield.files signed
+PASS: release build stable/1.0.1-3: grassfield-notes.json signed
+PASS: release build stable/1.0.1-3: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.1-3: every package is named grassfield-*
+PASS: release build stable/1.0.1-3: no package declares replaces=
+PASS: release build stable/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.1-3: notes valid, newest release 1.0.1-3
+check-tree: 0 failure(s)
+PASS: the tree follows the contract (check-tree.sh: every package with the SHA-256 its database records)
+PASS: a database signed by the rogue key -> pacman -Sy exit 1 (error: grassfield: key "2451C19F510FD60B1BF76086A8DB12051E9084D1" is unknown)
+PASS: ... and the checker answers failed (its [grassfield]-only sync), no crash
+PASS: notes signed by the rogue key: the update is offered without notes
+PASS: packages signed by the rogue key (database signed by K) -> pacman -Syu exit 1, still 1.0.0-3 (error: grassfield: key "2451C19F510FD60B1BF76086A8DB12051E9084D1" is unknown)
+PASS: the checker sees Grassfield 1.0.0 -> 1.0.1 with verified notes
+   notes: [{'version': '1.0.1-3', 'date': '2026-10-27', 'notes': {'en': 'Grassfield 1.0.1: what changed.\nSecond line.', 'fr': 'Grassfield 1.0.1 : ce qui a changé.'}}]
+PASS: pacman -Syu installs 1.0.1 (grassfield-desktop, -compositor and -icons together)
+PASS: the checker: up-to-date
+
+== ADR-0033 f, O7: 1.0.1 rebuilt for its Hyprland with pkgrel 4 (build-channel.sh --pkgrel, no new tag)
+PASS: build-channel.sh v1.0.1 --pkgrel 4 -> exit 0 (stable: publish: snapshot 20261027T173718Z-76cc1feb7269 (release 1.0.1-4), was 20261027T172048Z-ac07a4972cd2)
+PASS: its notes: 'Rebuilt for Hyprland 0.56.2' first, then 1.0.1-3 and 1.0.0-3 from the tags
+PASS: no symbolic link in the tree
+PASS: stable 20261027T173718Z-76cc1feb7269: manifest.json names every file with its SHA-256
+PASS: stable 20261027T173718Z-76cc1feb7269: its grassfield-keyring is /work/keyring's, the whole package
+PASS: stable 20261027T173718Z-76cc1feb7269: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield.db signed
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield.files signed
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield-notes.json signed
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield-compositor-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield-desktop-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield-icons-1.0.1-4-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T173718Z-76cc1feb7269: every package is named grassfield-*
+PASS: stable 20261027T173718Z-76cc1feb7269: no package declares replaces=
+PASS: stable 20261027T173718Z-76cc1feb7269: grassfield-desktop depends on grassfield-keyring
+PASS: stable 20261027T173718Z-76cc1feb7269: notes valid, newest release 1.0.1-4
+PASS: beta 20261027T173719Z-a63a21a1e5b4: manifest.json names every file with its SHA-256
+PASS: beta 20261027T173719Z-a63a21a1e5b4: its grassfield-keyring is /work/keyring's, the whole package
+PASS: beta 20261027T173719Z-a63a21a1e5b4: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield.db signed
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield.files signed
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield-notes.json signed
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield-compositor-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield-desktop-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield-icons-1.0.1-4-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173719Z-a63a21a1e5b4: every package is named grassfield-*
+PASS: beta 20261027T173719Z-a63a21a1e5b4: no package declares replaces=
+PASS: beta 20261027T173719Z-a63a21a1e5b4: grassfield-desktop depends on grassfield-keyring
+PASS: beta 20261027T173719Z-a63a21a1e5b4: notes valid, newest release 1.0.1-4
+PASS: release build beta/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.0-3: grassfield.db signed
+PASS: release build beta/1.0.0-3: grassfield.files signed
+PASS: release build beta/1.0.0-3: grassfield-notes.json signed
+PASS: release build beta/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.0-3: every package is named grassfield-*
+PASS: release build beta/1.0.0-3: no package declares replaces=
+PASS: release build beta/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.0-3: notes valid, newest release 1.0.0-3
+PASS: release build beta/1.0.1-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.1-3: grassfield.db signed
+PASS: release build beta/1.0.1-3: grassfield.files signed
+PASS: release build beta/1.0.1-3: grassfield-notes.json signed
+PASS: release build beta/1.0.1-3: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.1-3: every package is named grassfield-*
+PASS: release build beta/1.0.1-3: no package declares replaces=
+PASS: release build beta/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.1-3: notes valid, newest release 1.0.1-3
+PASS: release build beta/1.0.1-4: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.1-4: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.1-4: grassfield.db signed
+PASS: release build beta/1.0.1-4: grassfield.files signed
+PASS: release build beta/1.0.1-4: grassfield-notes.json signed
+PASS: release build beta/1.0.1-4: grassfield-compositor-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: grassfield-desktop-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: grassfield-icons-1.0.1-4-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.1-4: every package is named grassfield-*
+PASS: release build beta/1.0.1-4: no package declares replaces=
+PASS: release build beta/1.0.1-4: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.1-4: notes valid, newest release 1.0.1-4
+PASS: release build stable/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.0-3: grassfield.db signed
+PASS: release build stable/1.0.0-3: grassfield.files signed
+PASS: release build stable/1.0.0-3: grassfield-notes.json signed
+PASS: release build stable/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.0-3: every package is named grassfield-*
+PASS: release build stable/1.0.0-3: no package declares replaces=
+PASS: release build stable/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.0-3: notes valid, newest release 1.0.0-3
+PASS: release build stable/1.0.1-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.1-3: grassfield.db signed
+PASS: release build stable/1.0.1-3: grassfield.files signed
+PASS: release build stable/1.0.1-3: grassfield-notes.json signed
+PASS: release build stable/1.0.1-3: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.1-3: every package is named grassfield-*
+PASS: release build stable/1.0.1-3: no package declares replaces=
+PASS: release build stable/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.1-3: notes valid, newest release 1.0.1-3
+PASS: release build stable/1.0.1-4: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.1-4: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.1-4: grassfield.db signed
+PASS: release build stable/1.0.1-4: grassfield.files signed
+PASS: release build stable/1.0.1-4: grassfield-notes.json signed
+PASS: release build stable/1.0.1-4: grassfield-compositor-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-4: grassfield-desktop-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-4: grassfield-icons-1.0.1-4-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-4: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.1-4: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.1-4: every package is named grassfield-*
+PASS: release build stable/1.0.1-4: no package declares replaces=
+PASS: release build stable/1.0.1-4: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.1-4: notes valid, newest release 1.0.1-4
+check-tree: 0 failure(s)
+PASS: the tree follows the contract
+PASS: the checker: 1.0.1-3 -> 1.0.1-4 with its verified note
+PASS: pacman -Syu -> exit 0, installs 1.0.1-4
+
+== A10 beta, then back to stable without a downgrade
+PASS: build-channel.sh 1.1.0-beta1 -> exit 0, beta only
+PASS: 1.1.0-beta1's beta notes list every earlier release, plain and suffixed
+PASS: on stable the checker still says up-to-date
+gpg: next trustdb check due at 2026-10-28
+PASS: grassfield-channel-set beta -> exit 0
+PASS: the checker: 1.1.0beta1 available on beta, with its notes
+PASS: pacman -Syu installs 1.1.0beta1
+gpg: next trustdb check due at 2026-10-28
+PASS: grassfield-channel-set stable -> exit 0
+PASS: back on stable: the checker offers nothing
+PASS: pacman -Syu keeps 1.1.0beta1 ('is newer than grassfield')
+
+== A7i a rollback over HTTP (the edge rule of scripts/serve.py)
+:: Synchronizing package databases...
+ core downloading...
+ extra downloading...
+ multilib downloading...
+ grassfield downloading...
+PASS: pacman -Sy over the redirects of the current snapshot (1.0.1)
+PASS: the pointer moved back to the older snapshot: pacman -Sy fails for this client (error: grassfield: signature from "Grassfield e2e k (throwaway) <k@grassfield.invalid>" is invalid)
+PASS: rollback.sh --to the current snapshot -> refused, exit 1 (rollback.sh: 20261027T173718Z-76cc1feb7269 is the current snapshot)
+PASS: rollback.sh --to a snapshot that does not exist -> refused, exit 1 (rollback.sh: no snapshot 20991231T000000Z-000000000000 in stable)
+PASS: a rollback the publisher refuses (a keyring that trusts no key) -> exit 1, nothing withdrawn, the pointer unmoved (rollback.sh: the publisher refused the rollback: nothing changed)
+PASS: rollback.sh --to 20261027T170319Z-f0034d9a4f60 -> exit 0: a new snapshot (20261027T174829Z-f7687573f9b2), grassfield-desktop 1.0.0-3, after 20261027T173718Z-76cc1feb7269
+PASS: ... the newer release builds withdrawn, so the publisher's next run cannot put them back (review M3): releases/stable 1.0.0-3 
+error: grassfield: signature from "Grassfield e2e k (throwaway) <k@grassfield.invalid>" is invalid
+:: Synchronizing package databases...
+ core downloading...
+ extra downloading...
+ multilib downloading...
+ grassfield downloading...
+PASS: ... pacman -Sy works
+PASS: ... and pacman -Syu -> exit 0, downgrades nothing (1.1.0beta1-3 'is newer than grassfield' 1.0.0-3)
+   serve.py: "GET /stable/x86_64/grassfield.db HTTP/1.1" 302 -
+   serve.py: "GET /stable/x86_64/grassfield.db HTTP/1.1" 302 -
+   serve.py: "GET /stable/x86_64/snap/20261027T170319Z-f0034d9a4f60/grassfield.db HTTP/1.0" 304 -
+   serve.py: "GET /stable/x86_64/grassfield.db HTTP/1.1" 302 -
+PASS: no symbolic link in the tree
+PASS: stable 20261027T174829Z-f7687573f9b2: manifest.json names every file with its SHA-256
+PASS: stable 20261027T174829Z-f7687573f9b2: its grassfield-keyring is /work/keyring's, the whole package
+PASS: stable 20261027T174829Z-f7687573f9b2: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield.db signed
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield.files signed
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield-notes.json signed
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: stable 20261027T174829Z-f7687573f9b2: every package is named grassfield-*
+PASS: stable 20261027T174829Z-f7687573f9b2: no package declares replaces=
+PASS: stable 20261027T174829Z-f7687573f9b2: grassfield-desktop depends on grassfield-keyring
+PASS: stable 20261027T174829Z-f7687573f9b2: notes valid, newest release 1.0.0-3
+PASS: beta 20261027T174802Z-68d1138456a1: manifest.json names every file with its SHA-256
+PASS: beta 20261027T174802Z-68d1138456a1: its grassfield-keyring is /work/keyring's, the whole package
+PASS: beta 20261027T174802Z-68d1138456a1: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield.db signed
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield.files signed
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield-notes.json signed
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield-compositor-1.1.0beta1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield-desktop-1.1.0beta1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield-icons-1.1.0beta1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T174802Z-68d1138456a1: every package is named grassfield-*
+PASS: beta 20261027T174802Z-68d1138456a1: no package declares replaces=
+PASS: beta 20261027T174802Z-68d1138456a1: grassfield-desktop depends on grassfield-keyring
+PASS: beta 20261027T174802Z-68d1138456a1: notes valid, newest release 1.1.0beta1-3
+PASS: release build beta/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.0-3: grassfield.db signed
+PASS: release build beta/1.0.0-3: grassfield.files signed
+PASS: release build beta/1.0.0-3: grassfield-notes.json signed
+PASS: release build beta/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.0-3: every package is named grassfield-*
+PASS: release build beta/1.0.0-3: no package declares replaces=
+PASS: release build beta/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.0-3: notes valid, newest release 1.0.0-3
+PASS: release build beta/1.0.1-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.1-3: grassfield.db signed
+PASS: release build beta/1.0.1-3: grassfield.files signed
+PASS: release build beta/1.0.1-3: grassfield-notes.json signed
+PASS: release build beta/1.0.1-3: grassfield-compositor-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-desktop-1.0.1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-icons-1.0.1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.1-3: every package is named grassfield-*
+PASS: release build beta/1.0.1-3: no package declares replaces=
+PASS: release build beta/1.0.1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.1-3: notes valid, newest release 1.0.1-3
+PASS: release build beta/1.0.1-4: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.0.1-4: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.0.1-4: grassfield.db signed
+PASS: release build beta/1.0.1-4: grassfield.files signed
+PASS: release build beta/1.0.1-4: grassfield-notes.json signed
+PASS: release build beta/1.0.1-4: grassfield-compositor-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: grassfield-desktop-1.0.1-4-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: grassfield-icons-1.0.1-4-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.1-4: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.1-4: every package is named grassfield-*
+PASS: release build beta/1.0.1-4: no package declares replaces=
+PASS: release build beta/1.0.1-4: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.1-4: notes valid, newest release 1.0.1-4
+PASS: release build beta/1.1.0beta1-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build beta/1.1.0beta1-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build beta/1.1.0beta1-3: grassfield.db signed
+PASS: release build beta/1.1.0beta1-3: grassfield.files signed
+PASS: release build beta/1.1.0beta1-3: grassfield-notes.json signed
+PASS: release build beta/1.1.0beta1-3: grassfield-compositor-1.1.0beta1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.1.0beta1-3: grassfield-desktop-1.1.0beta1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.1.0beta1-3: grassfield-icons-1.1.0beta1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.1.0beta1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.1.0beta1-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.1.0beta1-3: every package is named grassfield-*
+PASS: release build beta/1.1.0beta1-3: no package declares replaces=
+PASS: release build beta/1.1.0beta1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.1.0beta1-3: notes valid, newest release 1.1.0beta1-3
+PASS: release build stable/1.0.0-3: its grassfield-keyring is /work/keyring's, the whole package
+PASS: release build stable/1.0.0-3: signatures checked with its grassfield-keyring (grassfield-keyring-20261027-2-any.pkg.tar.zst, 1 trusted key(s))
+PASS: release build stable/1.0.0-3: grassfield.db signed
+PASS: release build stable/1.0.0-3: grassfield.files signed
+PASS: release build stable/1.0.0-3: grassfield-notes.json signed
+PASS: release build stable/1.0.0-3: grassfield-compositor-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-desktop-1.0.0-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-icons-1.0.0-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build stable/1.0.0-3: nothing else in the folder (what is uploaded)
+PASS: release build stable/1.0.0-3: every package is named grassfield-*
+PASS: release build stable/1.0.0-3: no package declares replaces=
+PASS: release build stable/1.0.0-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build stable/1.0.0-3: notes valid, newest release 1.0.0-3
+check-tree: 0 failure(s)
+PASS: the tree after the rollback still follows the contract
+
+== removal, and the real keyless keyring
+   pacman -Rn exit 0; [grassfield] sections 0; K ''
+PASS: pacman -Rn: exit 0, no [grassfield] line, no file, K no longer in pacman's keyring, pacman works
+PASS: this repository's keyring (no key until O11): pacman -U exit 0, installed, empty, trusts nothing (184 keys before, 184 after, 0 Grassfield uid)
+checking dependencies...
+
+Packages (1) grassfield-keyring-20261027-2
+
+
+:: Do you want to remove these packages? [Y/n] 
+:: Processing package changes...
+removing grassfield-keyring...
+:: Running post-transaction hooks...
+(1/1) Arming ConditionNeedsUpdate...
+PASS: ... and removes cleanly
+
+== done: 44 checks, 0 failure(s)
+e2e exit 0

@@ -1,0 +1,39 @@
+$ docker run ... -v <git archive of db904b8>:/packages:ro -v <out>:/out:ro archlinux:base@<pinned> bash /packages/tests/smoke.sh --tree /out/after/tree --keyring /out/after/build-signing-key.gpg   (guard.sh's accepted build)
+PASS: no symbolic link in the tree
+PASS: beta 20261027T173248Z-b65e31d6de69: manifest.json names every file with its SHA-256
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield.db signed
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield.files signed
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield-notes.json signed
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield-compositor-1.0.0rc1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield-desktop-1.0.0rc1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield-icons-1.0.0rc1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: beta 20261027T173248Z-b65e31d6de69: every package is named grassfield-*
+PASS: beta 20261027T173248Z-b65e31d6de69: no package declares replaces=
+PASS: beta 20261027T173248Z-b65e31d6de69: grassfield-desktop depends on grassfield-keyring
+PASS: beta 20261027T173248Z-b65e31d6de69: notes valid, newest release 1.0.0rc1-3
+PASS: release build beta/1.0.0rc1-3: grassfield.db signed
+PASS: release build beta/1.0.0rc1-3: grassfield.files signed
+PASS: release build beta/1.0.0rc1-3: grassfield-notes.json signed
+PASS: release build beta/1.0.0rc1-3: grassfield-compositor-1.0.0rc1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc1-3: grassfield-desktop-1.0.0rc1-3-x86_64.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc1-3: grassfield-icons-1.0.0rc1-3-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc1-3: grassfield-keyring-20261027-2-any.pkg.tar.zst signed, the database's SHA-256
+PASS: release build beta/1.0.0rc1-3: nothing else in the folder (what is uploaded)
+PASS: release build beta/1.0.0rc1-3: every package is named grassfield-*
+PASS: release build beta/1.0.0rc1-3: no package declares replaces=
+PASS: release build beta/1.0.0rc1-3: grassfield-desktop depends on grassfield-keyring
+PASS: release build beta/1.0.0rc1-3: notes valid, newest release 1.0.0rc1-3
+check-tree: 0 failure(s)
+PASS: the tree follows the contract (check-tree.sh)
+PASS: pacman -S grassfield-desktop, -compositor and -icons from the beta channel (signatures required); grassfield-keyring: Installed as a dependency for another package
+   grassfield-desktop 1.0.0rc1-3
+   grassfield-compositor 1.0.0rc1-3
+   grassfield-icons 1.0.0rc1-3
+   grassfield-keyring 20261027-2
+PASS: grassfield-update-check as a user: up-to-date (up-to-date custom)
+PASS: grassfield-channel-set reads the channel (custom: the Server is this test's, not the build's base)
+PASS: a build that pins no key yet (O11): grassfield-channel-set stable refuses ('grassfield-channel-set: no signing key in this build')
+PASS: pacman -Rns: no [grassfield] line, no /etc/pacman.d/grassfield.conf, pacman works
+smoke: 6 checks, 0 failure(s)
+exit 0

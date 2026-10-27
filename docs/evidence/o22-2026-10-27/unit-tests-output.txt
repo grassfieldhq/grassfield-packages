@@ -1,0 +1,61 @@
+$ tests/run-in-container.sh --network host -e HTTPS_PROXY ... -v <CA bundle>:/ccr-ca.crt:ro (on a git archive of f678b7d)
+warning: gnupg-2.4.9-3 is up to date -- skipping
+test_a_line_that_does_not_parse_fails_closed (test_catalog.Keyring.test_a_line_that_does_not_parse_fails_closed) ... ok
+test_fingerprints_are_read_whatever_their_case_and_spacing (test_catalog.Keyring.test_fingerprints_are_read_whatever_their_case_and_spacing) ... ok
+test_check_env (test_catalog.Recipes.test_check_env) ... ok
+test_commands_are_read_as_shell (test_catalog.Recipes.test_commands_are_read_as_shell) ... ok
+test_pin_command (test_catalog.Recipes.test_pin_command) ... ok
+test_pins (test_catalog.Recipes.test_pins) ... ok
+test_recipes (test_catalog.Recipes.test_recipes) ... ok
+test_sync_pattern (test_catalog.Recipes.test_sync_pattern) ... ok
+test_the_reviews_bypasses_are_refused (test_catalog.Recipes.test_the_reviews_bypasses_are_refused) ... ok
+test_what_pr_4s_merge_left (test_catalog.Recipes.test_what_pr_4s_merge_left) ... ok
+test_apps (test_catalog.Rules.test_apps) ... ok
+test_good_catalog_passes (test_catalog.Rules.test_good_catalog_passes) ... ok
+test_malformed_types_are_problems_not_crashes (test_catalog.Rules.test_malformed_types_are_problems_not_crashes) ... ok
+test_sections (test_catalog.Rules.test_sections) ... ok
+test_setups (test_catalog.Rules.test_setups) ... ok
+test_texts (test_catalog.Rules.test_texts) ... ok
+test_top_level (test_catalog.Rules.test_top_level) ... ok
+test_webapp_name (test_catalog.Rules.test_webapp_name) ... ok
+test_a_signed_message_is_not_a_signature (test_catalog.Signature.test_a_signed_message_is_not_a_signature) ... ok
+test_changed_file_and_icon (test_catalog.Signature.test_changed_file_and_icon) ... ok
+test_deep_signed_json (test_catalog.Signature.test_deep_signed_json) ... ok
+test_good_signature (test_catalog.Signature.test_good_signature) ... ok
+test_hand_written_keyring_lists (test_catalog.Signature.test_hand_written_keyring_lists) ... ok
+test_oversize_catalog (test_catalog.Signature.test_oversize_catalog) ... ok
+test_refusals (test_catalog.Signature.test_refusals) ... ok
+test_sign_failure_is_one_line (test_catalog.Signature.test_sign_failure_is_one_line) ... ok
+test_signed_but_not_json (test_catalog.Signature.test_signed_but_not_json) ... ok
+test_signer_not_in_the_keyring (test_catalog.Signature.test_signer_not_in_the_keyring) ... ok
+test_two_signers (test_catalog.Signature.test_two_signers) ... ok
+test_unreadable_revoked_list_refuses_everything (test_catalog.Signature.test_unreadable_revoked_list_refuses_everything) ... ok
+test_what_a_fetch_can_leave (test_catalog.Signature.test_what_a_fetch_can_leave) ... ok
+test_build_is_deterministic_and_bounded (test_catalog.Sources.test_build_is_deterministic_and_bounded) ... ok
+test_deep_json_is_a_problem (test_catalog.Sources.test_deep_json_is_a_problem) ... ok
+test_icon_needs_legal_review_mark (test_catalog.Sources.test_icon_needs_legal_review_mark) ... ok
+test_malformed_sources_give_problems_not_tracebacks (test_catalog.Sources.test_malformed_sources_give_problems_not_tracebacks) ... ok
+test_source_problems (test_catalog.Sources.test_source_problems) ... ok
+test_sources_pass_and_icons_resolve (test_catalog.Sources.test_sources_pass_and_icons_resolve) ... ok
+test_unused_icon_and_missing_icon (test_catalog.Sources.test_unused_icon_and_missing_icon) ... ok
+test_a_catalog_alone_is_never_the_first_snapshot (test_publish.Publisher.test_a_catalog_alone_is_never_the_first_snapshot) ... ok
+test_a_catalog_must_pass_the_stores_checks (test_publish.Publisher.test_a_catalog_must_pass_the_stores_checks) ... ok
+test_db_naming_an_older_package_is_refused (test_publish.Publisher.test_db_naming_an_older_package_is_refused) ... ok
+test_deliberate_rollback (test_publish.Publisher.test_deliberate_rollback) ... ok
+test_first_release_then_catalog_then_release (test_publish.Publisher.test_first_release_then_catalog_then_release) ... ok
+test_immutable_names (test_publish.Publisher.test_immutable_names) ... ok
+test_latest_state_after_a_cancelled_run (test_publish.Publisher.test_latest_state_after_a_cancelled_run) ... ok
+test_never_backwards (test_publish.Publisher.test_never_backwards) ... ok
+test_nothing_new_writes_nothing (test_publish.Publisher.test_nothing_new_writes_nothing) ... ok
+test_only_the_icons_the_catalog_lists_are_uploaded (test_publish.Publisher.test_only_the_icons_the_catalog_lists_are_uploaded) ... ok
+test_pointer_moved_while_building (test_publish.Publisher.test_pointer_moved_while_building) ... ok
+test_prune_keeps_the_current_snapshot (test_publish.Publisher.test_prune_keeps_the_current_snapshot) ... ok
+test_release_signatures_are_checked (test_publish.Publisher.test_release_signatures_are_checked) ... ok
+test_rollback_refusals (test_publish.Publisher.test_rollback_refusals) ... ok
+test_the_command_needs_the_keyring (test_publish.Publisher.test_the_command_needs_the_keyring) ... ok
+
+----------------------------------------------------------------------
+Ran 53 tests in 6.585s
+
+OK
+exit 0
