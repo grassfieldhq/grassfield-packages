@@ -201,7 +201,7 @@ expect "pacman -Syu installs 1.1.0beta1" test "$(installed)" == "1.1.0beta1-$REL
 expect "grassfield-channel-set stable -> exit 0" as alice grassfield-channel-set stable
 expect "back on stable: the checker offers nothing" test "$(check state grassfield.available)" == "up-to-date None"
 pacman -Syu --noconfirm >"$W/syu.log" 2>&1
-expect "pacman -Syu keeps 1.1.0beta1 ('is newer than grassfield')" test "$(installed):$(grep -c 'is newer than grassfield' "$W/syu.log")" == "1.1.0beta1-$REL:1"
+expect "pacman -Syu keeps 1.1.0beta1 ('is newer than grassfield')" test "$(installed):$(grep -q 'is newer than grassfield' "$W/syu.log" && echo said)" == "1.1.0beta1-$REL:said"
 
 say "A7i a rollback over HTTP (the edge rule of scripts/serve.py)"
 python3 -I "$P/scripts/serve.py" "$W/tree" 8788 2>"$W/serve.log" &
@@ -228,7 +228,12 @@ expect "the tree after the rollback still follows the contract" "$P/scripts/chec
 say "removal, and the real keyless keyring"
 pacman -Rn --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >"$W/rn.log" 2>&1; rc=$?
 echo "   pacman -Rn exit $rc; pacman.conf [grassfield] lines $(grep -c grassfield /etc/pacman.conf); K '$(validity "$K")'"
-grep -E '^(error|warning|grassfield)' "$W/rn.log" | head -n 5 | sed 's/^/   /'
+if grep -q grassfield /etc/pacman.conf; then
+  sed 's/^/   rn.log: /' "$W/rn.log"
+  grep -iE 'scriptlet|grassfield' /var/log/pacman.log | tail -n 15 | sed 's/^/   pacman.log: /'
+  tail -n 4 /etc/pacman.conf | sed 's/^/   pacman.conf: /'
+  ls -l /run/grassfield /usr/lib/grassfield/grassfield-channel-scriptlet 2>&1 | sed 's/^/   /'
+fi
 expect "pacman -Rn: exit 0, no [grassfield] line, no file, K no longer in pacman's keyring, pacman works" \
   test "$rc:$(grep -c grassfield /etc/pacman.conf):$(ls /etc/pacman.d/grassfield.conf 2>/dev/null | wc -l):$(validity "$K"):$(pacman -Qq pacman)" == "0:0:0::pacman"
 before=$(gpg --homedir /etc/pacman.d/gnupg --batch --with-colons --list-keys 2>/dev/null | grep -c '^pub:')
