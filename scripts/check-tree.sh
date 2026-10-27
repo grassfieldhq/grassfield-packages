@@ -15,10 +15,12 @@
 # releases/<channel>/<version> (what the channel's publisher reads, ADR-0037 g): grassfield.db, grassfield.files and
 # grassfield-notes.json, each with a valid signature; a snapshot's manifest.json names each of its files with its SHA-256;
 # every package the database names is beside the packages (the channel folder, the release build) with the SHA-256 the
-# database records and a valid signature, is named grassfield-* and replaces nothing; the notes are version 1 of that
-# channel, at most 64 KiB and 20 releases, `en` everywhere, and their first release is the database's grassfield-desktop
-# (and a release build's version). A release build holds nothing else: the packages its database names, the three files,
-# and their .sig (what is uploaded). No symbolic link anywhere. Reads only. Exit 0 all PASS, 1 a FAIL, 2 usage.
+# database records and a valid signature, is named grassfield-* and replaces nothing, and grassfield-desktop depends on
+# grassfield-keyring (grassfield ADR-0033 O22: it carries the key that verifies the updates); the notes are version 1
+# of that channel, at most 64 KiB and 20 releases, `en` everywhere, and their first release is the database's
+# grassfield-desktop (and a release build's version). A release build holds nothing else: the packages its database
+# names, the three files, and their .sig (what is uploaded). No symbolic link anywhere. Reads only. Exit 0 all PASS,
+# 1 a FAIL, 2 usage.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -107,6 +109,10 @@ check_set() {
   grep -qx '%REPLACES%' <<<"$desc" && bad "$l: a package declares replaces=" || ok "$l: no package declares replaces="
   desktop=$(awk '/^%NAME%$/ { getline n } /^%VERSION%$/ { getline v; if (n == "grassfield-desktop") { print v; exit } }' <<<"$desc")
   [[ -z $want || $desktop == "$want" ]] || bad "$l: grassfield-desktop $desktop in the database of release build $want"
+  awk '/^%NAME%$/ { getline n; next } /^%DEPENDS%$/ { d = 1; next } /^$/ { d = 0 }
+       d && n == "grassfield-desktop" && $0 == "grassfield-keyring" { found = 1 } END { exit !found }' <<<"$desc" &&
+    ok "$l: grassfield-desktop depends on grassfield-keyring" ||
+    bad "$l: grassfield-desktop does not depend on grassfield-keyring (grassfield ADR-0033 O22)"
   python3 -I - "$meta/grassfield-notes.json" "$c" "$desktop" <<'PY' && ok "$l: notes valid, newest release $desktop" || bad "$l: notes invalid"
 import json, os, sys
 path, channel, desktop = sys.argv[1:4]

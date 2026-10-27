@@ -128,10 +128,8 @@ if [[ -n $reused ]]; then
   signer=$(gpg --homedir "$gnupghome" --batch --no-tty --status-fd 1 --verify "$keyring_pkg.sig" "$keyring_pkg" 2>>"$log" |
     awk '$2 == "VALIDSIG" { print $12 }' || true)
   [[ $signer == "$key" ]] || die "$reused is not signed by $key"
-  for f in grassfield.gpg grassfield-trusted grassfield-revoked; do
-    bsdtar -xOf "$keyring_pkg" "usr/share/grassfield/pacman-keyring/$f" | cmp -s - "/build/keyring/$f" ||
-      die "keyring/$f is not what grassfield-keyring $kv holds: a changed keyring is a new pkgver (keyring/PKGBUILD)"
-  done
+  "$here/scripts/keyring-check.sh" "$keyring_pkg" /build/keyring >>"$log" 2>&1 ||
+    die "keyring/ is not what grassfield-keyring $kv holds (see $log): a changed keyring is a new pkgver or pkgrel (keyring/PKGBUILD)"
   echo "grassfield-keyring $kv: the one built before, used again ($reused)"
 else
   (cd /build/keyring && runuser -u builder -- makepkg -f --noconfirm >>"$log" 2>&1) || die "makepkg grassfield-keyring (see $log)"
@@ -169,6 +167,10 @@ for f in "${built[@]}" "$keyring_pkg"; do
   name=$(sed -n 's/^pkgname = //p' <<<"$info")
   [[ $name == grassfield-* ]] || die "$(basename "$f"): $name is not named grassfield-* (ADR-0033 b.6)"
   ! grep -q '^replaces = ' <<<"$info" || die "$(basename "$f"): replaces= is not allowed in the channel (ADR-0033 b.6)"
+  # The keyring comes with the desktop (grassfield ADR-0033 O22): a release whose grassfield-desktop does not depend on it
+  # would install without the key that verifies its updates.
+  [[ $name != grassfield-desktop ]] || grep -qx 'depend = grassfield-keyring' <<<"$info" ||
+    die "$(basename "$f"): grassfield-desktop does not depend on grassfield-keyring (grassfield ADR-0033 O22): a ref from before that change"
 done
 for f in "${built[@]}"; do sign "$f"; done
 printf '%s\n' "${built[@]##*/}" "${keyring_pkg##*/}"

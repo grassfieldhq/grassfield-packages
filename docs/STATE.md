@@ -173,6 +173,20 @@ Last updated: 2026-10-27
      names the lock's commit.
   5. The comment says what the scan does with a command named by a variable: resolved, or listed, not refused.
   The pin step on v4.0.4 in a throwaway container: `nothing changed` (the same 43 files), 7 notes to read.
+- 2026-10-27, branch `claude/grassfield-software-update-dj2bvt` (the follow-up of grassfield PR #24, grassfield ADR-0033 O22:
+  grassfield-desktop depends on grassfield-keyring; integrator review of grassfield #24's 532fb8f):
+  - `scripts/build-channel.sh` refuses a release whose grassfield-desktop `.PKGINFO` lacks `depend = grassfield-keyring`
+    (a grassfield ref from before #24), and `scripts/check-tree.sh` refuses a set whose database's grassfield-desktop does
+    not depend on it (the CI build check and the release job's third container);
+  - `keyring/grassfield-keyring.install`: `pre_remove` reads a last line without its newline too (`|| [ -n "$fpr" ]`), or,
+    after O11, that key would stay trusted after removal; grassfield-keyring 20261027-2 (pkgrel 2: a changed install
+    script); `build-channel.sh` reuses a built keyring only while it is still `keyring/`'s, the whole package
+    (`keyring-check.sh`, no longer the three files only), so such a change without a new pkgrel stops the build;
+  - `tests/e2e.sh` and `tests/smoke.sh`: the client names grassfield-desktop, -compositor and -icons only, and gets
+    grassfield-keyring "Installed as a dependency for another package"; `tests/release-build.sh` reads the keyring's
+    version from `keyring/PKGBUILD`, its fake grassfield-desktop depends on the keyring, and it checks the refusal and the
+    install script's last line.
+  - Evidence: `docs/evidence/o22-2026-10-27/`.
 - Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
@@ -212,7 +226,6 @@ Last updated: 2026-10-27
   missing environment unprotected when a job that names it runs, so this comes before `if: false` is removed.
 
 ## Next
-- Software Update step 1b (ADR-0033): the integrator's re-review of PR #3 (the counter-review's fixes, the unification and
-  the merge of #4); then grassfield's one-line follow-up adding grassfield-keyring to grassfield-desktop's depends (O21);
-  step 2 (the pane) in grassfield after its Settings PRs #8-#10.
+- Software Update: grassfield PR #24 (grassfield-keyring in grassfield-desktop's depends, owner decision O22) and this
+  repository's follow-up PR (below), then step 2 (the pane) in grassfield when the integrator posts it.
 - The Store's later steps add to the catalog (more sections, icons for apps without metadata after the legal review).

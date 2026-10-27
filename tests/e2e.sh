@@ -167,10 +167,11 @@ pacman -Rdd --noconfirm grassfield-keyring >>"$W/client.log" 2>&1   # the build'
 { pacman-key --add "$W/k.asc" && pacman-key --lsign-key "$K"; } >>"$W/client.log" 2>&1
 printf 'SigLevel = Required\nServer = file:///srv/view/stable/$arch\n' >/etc/pacman.d/grassfield.conf
 printf '\n[grassfield]\nInclude = /etc/pacman.d/grassfield.conf\n' >>/etc/pacman.conf
-# grassfield-keyring named too: grassfield-desktop does not depend on it yet (owner decision O21).
-pacman -Sy --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >>"$W/client.log" 2>&1
-expect "pacman -S from the repository installs grassfield-desktop 1.0.0-$REL and grassfield-keyring" \
-  test "$(installed):$(pacman -Q grassfield-keyring 2>/dev/null | wc -l)" == "1.0.0-$REL:1"
+# The three packages only: grassfield-keyring comes as grassfield-desktop's dependency (grassfield ADR-0033 O22).
+pacman -Sy --noconfirm grassfield-desktop grassfield-compositor grassfield-icons >>"$W/client.log" 2>&1
+reason=$(pacman -Qi grassfield-keyring 2>/dev/null | sed -n 's/^Install Reason *: //p')
+expect "pacman -S of the three packages from the repository: grassfield-desktop 1.0.0-$REL, grassfield-keyring ${reason:-not installed}" \
+  test "$(installed):$reason" == "1.0.0-$REL:Installed as a dependency for another package"
 out=$(as alice grassfield-channel-set stable 2>&1); rc=$?
 expect "alice: grassfield-channel-set stable -> exit 0 (b.3a step 5: template, keyring populated, hook linked)" test "$rc" == 0 || echo "$out"
 expect "the channel is stable; the checker: up-to-date" test "$(as alice grassfield-channel-set) $(check state channel)" == "stable up-to-date stable"

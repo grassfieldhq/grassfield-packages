@@ -38,10 +38,11 @@ channel=stable
 [[ -f /srv/view/stable/x86_64/grassfield.db ]] || channel=beta
 printf 'SigLevel = Required\nServer = file:///srv/view/%s/$arch\n' "$channel" >/etc/pacman.d/grassfield.conf
 printf '\n[grassfield]\nInclude = /etc/pacman.d/grassfield.conf\n' >>/etc/pacman.conf
-# grassfield-keyring named too: grassfield-desktop does not depend on it yet (grassfield ADR-0033 O21).
-pacman -Sy --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >>"$log" 2>&1
-expect "pacman -S grassfield-desktop, -compositor, -icons and -keyring from the $channel channel (signatures required)" \
-  pacman -Q grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring
+# The three packages only: grassfield-keyring comes as grassfield-desktop's dependency (grassfield ADR-0033 O22).
+pacman -Sy --noconfirm grassfield-desktop grassfield-compositor grassfield-icons >>"$log" 2>&1
+reason=$(pacman -Qi grassfield-keyring 2>/dev/null | sed -n 's/^Install Reason *: //p')
+expect "pacman -S grassfield-desktop, -compositor and -icons from the $channel channel (signatures required); grassfield-keyring: ${reason:-not installed}" \
+  bash -c "pacman -Q grassfield-desktop grassfield-compositor grassfield-icons >/dev/null && [[ '$reason' == 'Installed as a dependency for another package' ]]"
 pacman -Q grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring 2>/dev/null | sed 's/^/   /'
 useradd -m smoke
 state=$(runuser -u smoke -- env HOME=/home/smoke /usr/lib/grassfield/grassfield-update-check |
