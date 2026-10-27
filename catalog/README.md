@@ -62,8 +62,9 @@ pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bu
 2. `pin` first runs the scan, the second line: it refuses to write any pin when a file syncs pacman's databases, downloads
    code, builds from the AUR, uses `eval`, reads a script from a pipe or a heredoc, names a command it cannot know (an
    Omarchy command named at run time, a command made by a substitution), runs or sources a file the pins do not cover
-   (`bash "$OMARCHY_PATH/$h/run.sh"`, a path made at run time), hands a package manager or a downloader to a command it
-   does not know (`firejail "$pm" -Sy`), or cannot be read as shell. Such a setup is not offered.
-3. Otherwise it writes the pins and lists every new, changed and removed file, and the commands it could not resolve
-   ("read: …"). Read each listed file before committing `omarchy.lock`: the pin says nobody changed it, not that it is
+   (`bash "$OMARCHY_PATH/$h/run.sh"`, `./hidden.sh`, a path made at run time, a `PATH` naming another folder), hands a
+   package manager or a downloader to a command it does not know (`firejail "$pm" -Sy`), or cannot be read as shell.
+   Such a setup is not offered.
+3. Otherwise it writes the pins and lists every new, changed and removed file, and what it could not resolve ("read: …":
+   a command named by a variable, a variable or a substitution handed to a command it does not know). Read each listed file before committing `omarchy.lock`: the pin says nobody changed it, not that it is
    safe.

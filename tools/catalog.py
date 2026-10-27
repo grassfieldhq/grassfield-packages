@@ -128,15 +128,26 @@ DOWNLOADERS = {"curl", "wget", "aria2c", "axel", "rsync", "scp", "sftp", "lftp",
                "mise", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "pipx", "pip", "pip3", "cargo", "rustup", "uv",
                "uvx", "go", "gem"}
 GIT_FETCH = {"clone", "pull", "fetch", "submodule"}
+# Folders PATH may hold: the system's, Omarchy's own commands (judged by name) and PATH as it was; a program run from a
+# system folder by its path is judged by its name too.
+PATH_FOLDERS = {"$PATH", "${PATH}", "$OMARCHY_PATH/bin", "${OMARCHY_PATH}/bin", "/usr/local/sbin", "/usr/local/bin",
+                "/usr/bin", "/usr/sbin", "/bin", "/sbin"}
+SYSTEM_BIN = ("/usr/local/sbin/", "/usr/local/bin/", "/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/")
+DECLARATIONS = {"export", "declare", "typeset", "local", "readonly"}
 # What an argument may not name, through a command the scan does not know (firejail, strace, bwrap, parallel...): it
 # could run it, with options the scan cannot see.
 RUN_THROUGH = PACKAGE_MANAGERS | DOWNLOADERS | {"git"}
-# Commands that take a command or a package name as data and never run it; Omarchy's package helpers are read in the
-# closure, where what they do with the names is judged.
+# Commands that take a command, a package name or a value as data and never run it; Omarchy's package helpers are read
+# in the closure, where what they do with the names is judged.
 NAMES_AS_DATA = {"echo", "printf", "which", "type", "hash", "whereis", "pgrep", "pidof", "pkill", "killall", "chmod",
-                 "chown", "ln", "rm", "cp", "mv", "mkdir", "touch", "cat", "grep", "notify-send", "omarchy-cmd-present",
-                 "omarchy-cmd-missing", "omarchy-pkg-add", "omarchy-pkg-drop", "omarchy-pkg-missing",
-                 "omarchy-pkg-present", "omarchy-pkg-aur-add", "omarchy-pkg-aur-accessible"}
+                 "chown", "ln", "rm", "cp", "mv", "install", "mkdir", "touch", "cat", "grep", "jq", "head", "tail",
+                 "stat", "dirname", "basename", "realpath", "logger", "notify-send", "kill", "wait", "exit", "return",
+                 "shift", "set", ":", "omarchy-cmd-present", "omarchy-cmd-missing", "omarchy-pkg-add",
+                 "omarchy-pkg-drop", "omarchy-pkg-missing", "omarchy-pkg-present", "omarchy-pkg-aur-add",
+                 "omarchy-pkg-aur-accessible"}
+# One word that is all a variable or a substitution: what a command the scan does not know is handed, unknown.
+WHOLE_RUN_TIME = re.compile(r"^(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$\{[^}]*\}|\$[0-9@*]|__subst__|__subst_process__)$")
+FUNCTION = re.compile(r"(?m)^\s*(?:function\s+([A-Za-z_][A-Za-z0-9_:-]*)|([A-Za-z_][A-Za-z0-9_:-]*)\s*\(\s*\))")
 # What mise does without fetching anything (where, ls, rm...); every other mise command may install.
 MISE_LOCAL = {"where", "ls", "list", "current", "which", "rm", "remove", "uninstall", "unuse", "activate", "version",
               "--version"}
@@ -854,6 +865,15 @@ def literal_assignments(tokens):
     return seen
 
 
+def path_problems(word):
+    """A PATH assignment's folders the pins do not cover (an empty entry is the current folder)."""
+    m = re.match(r"^PATH\+?=(.*)$", word)
+    if not m:
+        return []
+    return [f"PATH set to a folder outside the pinned files ({entry or 'the current folder'})"
+            for entry in m.group(1).split(":") if entry.rstrip("/") not in PATH_FOLDERS or not entry]
+
+
 def run_time_name(word, literals):
     """The literal values of a command word that is one variable set only to literal text, else None."""
     m = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", word)
@@ -866,8 +886,12 @@ def read_command(words, literals, problems, notes, depth):
     while words:
         base = os.path.basename(words[0])
         if words[0] in SHELL_KEYWORDS or ASSIGNMENT.match(words[0]):
+            problems.extend(path_problems(words[0]))
             words = words[1:]
         elif words[0] in SHELL_NOT_RUN:
+            if words[0] in DECLARATIONS:
+                for word in words[1:]:
+                    problems.extend(path_problems(word))  # export PATH=...
             return out  # a test, a loop's list, a declaration: words, not a command (their $(...) are read)
         elif base in WRAPPERS:
             if base == "command" and len(words) > 1 and words[1] in ("-v", "-V"):
@@ -881,6 +905,7 @@ def read_command(words, literals, problems, notes, depth):
                 if words[0].startswith("-"):
                     words = words[2:] if words[0] in takes else words[1:]
                 elif ASSIGNMENT.match(words[0]):
+                    problems.extend(path_problems(words[0]))  # env PATH=...
                     words = words[1:]
                 elif plain:
                     plain, words = plain - 1, words[1:]
@@ -912,13 +937,26 @@ def read_command(words, literals, problems, notes, depth):
             notes.append(f"a command named at run time ({cmd}): read what it can be")
             out.append(words)  # a path made at run time names a file outside the pins (outside_closure)
         return out
+    if "/" in cmd and not cmd.startswith(SYSTEM_BIN):
+        out.append(words)  # ./x.sh, /tmp/x: a file, not a program found by name (outside_closure)
+        return out
     words = [os.path.basename(cmd)] + words[1:]
     base, args = words[0], words[1:]
-    if base not in RUN_THROUGH | NAMES_AS_DATA | TERMINAL_RUNNERS | {"gum", "trap", "eval"} and \
+    reads_on = base == "gum" and "--" in args  # gum ... -- CMD: CMD is read below
+    if base not in RUN_THROUGH | NAMES_AS_DATA | TERMINAL_RUNNERS | {"trap", "eval"} and not reads_on and \
             not base.startswith("omarchy-launch-"):
         for arg in args:
-            values = run_time_name(arg, literals) if "$" in arg else {arg}
-            for value in sorted(v for v in values or () if os.path.basename(v) in RUN_THROUGH):
+            values = run_time_name(arg, literals) if "$" in arg else None
+            if values is None:
+                last = os.path.basename(arg)
+                values = None if "$" in last or "`" in last or PLACEHOLDER in last else {last}
+            if values is None:
+                # Omarchy's commands and the file's own functions are read where they are written.
+                if WHOLE_RUN_TIME.match(arg) and not base.startswith("omarchy-"):
+                    shown = re.sub(r"__(subst|subst_process)__", "$(...)", arg)
+                    notes.append(f"{base} is handed {shown}, known only at run time: read what it can be")
+                continue
+            for value in sorted(v for v in values if os.path.basename(v) in RUN_THROUGH):
                 problems.append(f"{base} is handed {value} ({arg}): a package manager or downloader it may run")
     if base == "eval":
         problems.append("eval: code made at run time")
@@ -995,8 +1033,10 @@ def abbreviates(option, *names):
     return option.startswith("--") and len(option) >= 5 and any(n.startswith(option[2:]) for n in names)
 
 
-def command_findings(code, repo=None):
-    """(syncs, downloads, AUR names built, problems, notes) of a shell text, read command by command."""
+def command_findings(code, repo=None, functions=()):
+    """(syncs, downloads, AUR names built, problems, notes) of a shell text, read command by command. functions: shell
+    functions defined elsewhere in the closure; a function's own body is read where it is written (a function that runs
+    its arguments gets its note there), so what a call hands it is not noted again."""
     sync, download, built, problems, notes = False, False, [], [], []
     for words in simple_commands(code, problems, notes):
         cmd, args = words[0], words[1:]
@@ -1034,6 +1074,8 @@ def command_findings(code, repo=None):
             download = True
     if DYNAMIC_OMARCHY.search(code):
         problems.append("an Omarchy command named at run time")
+    functions = set(functions) | {a or b for a, b in FUNCTION.findall(code)}
+    notes = [n for n in notes if n.split(" is handed ", 1)[0] not in functions]
     return sync, download, built, problems, notes
 
 
@@ -1074,12 +1116,13 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
     problems = []
     closure = recipe_closure(omarchy, name)
     pinned = {rel for rel, _ in closure}
+    functions = {a or b for rel, text in closure if is_shell(rel, text) for a, b in FUNCTION.findall(text)}
     for rel, text in closure:
         if not is_shell(rel, text):
             continue  # a data or QML file: pinned, never run as shell
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         plain = code.replace("\\\n", "").replace('"', "").replace("'", "")
-        sync, download, built, other, seen = command_findings(code, repo)
+        sync, download, built, other, seen = command_findings(code, repo, functions)
         if notes is not None:
             notes += [f"{rel}: {note}" for note in sorted(set(seen))]
         if sync or SYNC.search(plain):

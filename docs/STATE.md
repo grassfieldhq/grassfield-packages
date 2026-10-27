@@ -189,11 +189,29 @@ Last updated: 2026-10-27
   - Evidence: the pin step on v4.0.4 (c668141) in a copy of `catalog/`: `nothing changed`, exit 0, the lock byte for byte
     the same, 10 notes (the 7 before and three `pacman -Q "$pkg"` in `omarchy-pkg-add`, `omarchy-pkg-aur-add` and
     `omarchy-pkg-missing`, queries over `for pkg in "$@"`).
+- 2026-10-27, PR #6 merged with PASS (1b51303). The two scan gaps its merge comment left (branch restarted from main, its
+  own PR):
+  1. A file run by a relative or foreign path (`cd "$OMARCHY_PATH/install" && ./hidden.sh`, `/tmp/x.sh`) is refused;
+     programs in the system's folders are still judged by name. A `PATH` assignment (a prefix, `env PATH=`, `export
+     PATH=`) naming a folder other than the system's, `$OMARCHY_PATH/bin` and `$PATH` is refused, an empty entry (the
+     current folder) too.
+  2. A variable or a substitution the scan cannot resolve, handed whole to a command it does not know, is a note
+     (`pm=$(command -v pacman); firejail $pm -Sy`, `firejail "$pm"` with `pm` never set, `gum spin --title t $pm -Sy`
+     without `--`, which is now read like any other command). Not noted: calls to Omarchy's commands and to the closure's
+     own shell functions (read where they are written; one that runs its arguments has its note there) and commands that
+     take values as data (`NAMES_AS_DATA`, now with `jq`, `head`, `kill`, `exit`...). A literal name after a variable
+     prefix (`"$d/pacman"`) is refused like a literal one.
+  The scan on v4.0.4 (c668141): the six setups pass; 19 notes (the 10 before, and 9 new: `sed`, `ffmpeg`, `yt-dlp`,
+  `quickshell` and `qs` handed a variable in the browser, monitor and shell helpers).
 - Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
 
 ## Tests run
+- PR #6's follow-up: `tests/run-in-container.sh --network host`: `Ran 55 tests … OK`, exit 0. The CI check job replayed in
+  a throwaway container: docker exit 0 (`validate: ok`; 15832 packages, 51 entries, 1604 AppStream components; `check-env:
+  ok`; both channels verified; no temporary GnuPG home left). `pin` on v4.0.4 in a copy of `catalog/`: `nothing changed`,
+  exit 0, the lock byte for byte the same, 19 notes.
 - Store step 2: `tests/run-in-container.sh --network host`: `Ran 54 tests … OK`, exit 0. The CI check job replayed in a
   throwaway container: docker exit 0 (`validate: ok`; 15831 packages, 51 entries and 1604 AppStream components gathered;
   `check-env: ok`; both channels built, signed with a throwaway key and verified; no temporary GnuPG home left).
@@ -224,6 +242,12 @@ Last updated: 2026-10-27
   ("Graphics & Design", "Photo & Video", "Developer Tools"), or stay neutral? The catalog uses neutral names until the owner
   decides; "Productivity", "Games", "Education" and "Utilities" are common to most stores but are in that list too. The
   section and category names and the publishers' icons need the M5 legal review before any publication (ST10).
+- **Legal (integrator, PR #6's merge; the owner chooses):** the sections Discover, Create, Work, Play, Develop are exactly
+  the Mac App Store's sidebar. Options, for the M5 review: (a) keep them (closest to macOS 27; the risk is the copied
+  structure); (b) neutral words with the same roles: "Featured", "Creativity", "Productivity", "Games", "Development";
+  (c) Grassfield's own: "Discover", "Make", "Office", "Fun", "Code". The section ids stay, only the titles change (each
+  file's `title`, en and fr). Nothing is published before M5, so this blocks nothing now (grassfield
+  `docs/legal/visual-review.md` E36, question 12).
 
 ## Owner steps before publishing is enabled
 - Create the `publish-stable` and `publish-beta` environments with required reviewers (the owner approves each run) and
