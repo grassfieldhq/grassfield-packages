@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check a channel tree against the contract before it is tested or published (grassfield ADR-0033 b.6, g, h.2).
 #
-#   check-tree.sh --tree DIR (--keyring FILE | --trusted)
+#   check-tree.sh --tree DIR (--keyring FILE | --trusted [--keyring-src DIR])
 #
 #   --keyring FILE  the public key(s) that signed the tree, as `gpg --export` writes them: CI and test builds, signed by a
 #                   throwaway key while the grassfield-keyring they carry holds no key (U23)
@@ -9,28 +9,33 @@
 #                   package its own database names, whose primary is in that keyring's grassfield-trusted and not in its
 #                   grassfield-revoked (gpgv's VALIDSIG argument 10). For the project's key: the release job, the tests
 #                   whose keyring carries their key
+#   --keyring-src DIR  with --trusted: that grassfield-keyring must hold exactly DIR's grassfield.gpg, grassfield-trusted
+#                   and grassfield-revoked, byte for byte (keyring/ in git: a build cannot add a trusted key)
 # For each <channel>/x86_64 with a pointer ({"snapshot": "<id>"}), the snapshot it names, and for each release build
 # releases/<channel>/<version> (what the channel's publisher reads, ADR-0037 g): grassfield.db, grassfield.files and
 # grassfield-notes.json, each with a valid signature; a snapshot's manifest.json names each of its files with its SHA-256;
 # every package the database names is beside the packages (the channel folder, the release build) with the SHA-256 the
 # database records and a valid signature, is named grassfield-* and replaces nothing; the notes are version 1 of that
 # channel, at most 64 KiB and 20 releases, `en` everywhere, and their first release is the database's grassfield-desktop
-# (and a release build's version). No symbolic link anywhere. Reads only. Exit 0 all PASS, 1 a FAIL, 2 usage.
+# (and a release build's version). A release build holds nothing else: the packages its database names, the three files,
+# and their .sig (what is uploaded). No symbolic link anywhere. Reads only. Exit 0 all PASS, 1 a FAIL, 2 usage.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-usage() { echo "usage: check-tree.sh --tree DIR (--keyring FILE | --trusted)" >&2; exit 2; }
-tree="" keyring="" trusted=""
+usage() { echo "usage: check-tree.sh --tree DIR (--keyring FILE | --trusted [--keyring-src DIR])" >&2; exit 2; }
+tree="" keyring="" trusted="" src=""
 while (($#)); do
   case $1 in
     --tree) tree=${2:-}; shift ;;
     --keyring) keyring=${2:-}; shift ;;
     --trusted) trusted=1 ;;
+    --keyring-src) src=${2:-}; shift ;;
     *) usage ;;
   esac
   shift
 done
 [[ -d $tree && (-s $keyring && -z $trusted || -z $keyring && -n $trusted) ]] || usage
+[[ -z $src || -n $trusted && -f $src/grassfield-trusted ]] || usage
 [[ -z $keyring ]] || keyring=$(realpath "$keyring")
 fails=0
 ok() { echo "PASS: $*"; }
@@ -55,6 +60,15 @@ keyring_of() { # label, the database, the folder of its packages: the keys that 
   fi
   k=$k/usr/share/grassfield/pacman-keyring
   keyring=$k/grassfield.gpg
+  if [[ -n $src ]]; then
+    local same=1 n
+    [[ $(LC_ALL=C ls "$k" | tr "\n" " ") == "grassfield-revoked grassfield-trusted grassfield.gpg " ]] || same=""
+    for n in grassfield.gpg grassfield-trusted grassfield-revoked; do
+      [[ $(sha256sum <"$k/$n" 2>/dev/null) == "$(sha256sum <"$src/$n")" ]] || same=""
+    done
+    [[ -n $same ]] && ok "$1: its grassfield-keyring holds exactly $src's files" ||
+      { bad "$1: its grassfield-keyring ($f) is not $src's: refused"; keyring=/dev/null allowed="" denied=""; return; }
+  fi
   allowed=$(sed -n 's/^\([0-9A-F]\{40\}\):.*/\1/p' "$k/grassfield-trusted")
   denied=$(sed -n 's/^\([0-9A-F]\{40\}\).*/\1/p' "$k/grassfield-revoked")
   [[ -n $allowed ]] && ok "$1: signatures checked with its grassfield-keyring ($f, $(wc -l <<<"$allowed") trusted key(s))" ||
@@ -81,6 +95,14 @@ check_set() {
       bad "$l: $f missing, its signature missing, invalid or untrusted, or not the SHA-256 the database records"
     fi
   done
+  if [[ -n $want ]]; then
+    local expected actual
+    expected=$( { printf '%s\n' grassfield.db grassfield.files grassfield-notes.json; for f in "${files[@]}"; do echo "${f%% *}"; done; } |
+      sed 'p; s/$/.sig/' | sort)
+    actual=$(ls -A "$meta" | sort)
+    [[ $actual == "$expected" ]] && ok "$l: nothing else in the folder (what is uploaded)" ||
+      bad "$l: other files than its packages, the three files and their .sig: $(comm -13 <(echo "$expected") <(echo "$actual") | tr '\n' ' ')"
+  fi
   names=$(awk '/^%NAME%$/ { getline; print }' <<<"$desc" | grep -v '^grassfield-' || true)
   [[ -z $names ]] && ok "$l: every package is named grassfield-*" || bad "$l: packages not named grassfield-*: $names"
   grep -qx '%REPLACES%' <<<"$desc" && bad "$l: a package declares replaces=" || ok "$l: no package declares replaces="
