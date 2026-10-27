@@ -507,6 +507,57 @@ class Recipes(unittest.TestCase):
         self.assertTrue(any("from an array" in n for n in finds('pkgs=(a b); pacman -S "${pkgs[@]}"')[4]))
         self.assertTrue(any("from an array" in n for n in finds('sudo pacman -S --noconfirm --needed "$@"')[4]))
 
+    def test_what_pr_5s_merge_left(self):
+        # The two gaps of PR #5's merge comment.
+        rp = catalog.recipe_problems
+        repo = {"game", "a"}
+        # 1. A file of Omarchy's, or any other, run by a shell or by its path: judged against the pins.
+        self.script("omarchy-install-shell", 'bash "$OMARCHY_PATH/install/missing.sh"')
+        self.assertIn("bash runs a script outside the pinned files ($OMARCHY_PATH/install/missing.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-shell", [], repo)))
+        self.script("omarchy-install-shellvar", 'h=install\nsh -e "$OMARCHY_PATH/$h/run.sh"')
+        self.assertIn("sh runs a script outside the pinned files ($OMARCHY_PATH/$h/run.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-shellvar", [], repo)))
+        self.script("omarchy-install-direct", '"$OMARCHY_PATH/install/missing.sh"')
+        self.assertIn("runs a file outside the pinned files ($OMARCHY_PATH/install/missing.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-direct", [], repo)))
+        self.script("omarchy-install-directvar", 'h=install\n"$OMARCHY_PATH/$h/run.sh"')
+        self.assertIn("runs a file outside the pinned files ($OMARCHY_PATH/$h/run.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-directvar", [], repo)))
+        self.script("omarchy-install-elsewhere", "bash /tmp/x.sh")
+        self.assertIn("bash runs a script outside the pinned files (/tmp/x.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-elsewhere", [], repo)))
+        # A file of the closure, run by a shell (with its options) or by its path: pinned and scanned (x.sh syncs).
+        for code in ('bash -e -o pipefail "$OMARCHY_PATH/install/helpers/x.sh"', '"$OMARCHY_PATH/install/helpers/x.sh"'):
+            with self.subTest(code):
+                self.script("omarchy-install-pinned", f"{code}\nomarchy-pkg-add a")
+                text = "\n".join(rp(self.omarchy, "omarchy-install-pinned", [], repo))
+                self.assertIn("syncs pacman's databases (through install/helpers/x.sh)", text)
+                self.assertNotIn("outside the pinned files", text)
+        # How a shell runs its code: text, a file, or its input.
+        self.assertEqual(catalog.shell_operand(["-ec", "pacman -Sy"]), ("c", "pacman -Sy"))
+        self.assertEqual(catalog.shell_operand(["-o", "pipefail", "x.sh", "a"]), ("file", "x.sh"))
+        self.assertEqual(catalog.shell_operand(["--norc", "--", "x.sh"]), ("file", "x.sh"))
+        for args in ([], ["-"], ["-s", "a"], ["-es"]):
+            self.assertEqual(catalog.shell_operand(args), ("input", None), args)
+
+        # 2. An argument naming a package manager or a downloader, through a command the scan does not know.
+        def finds(code):
+            return catalog.command_findings(code, repo)
+        for code in ("pm=pacman; firejail $pm -Sy x", "pm=/usr/bin/pacman; strace -f $pm -Sy x",
+                     'pm=yay; bwrap --bind / / "$pm"', "parallel pacman -S ::: a b", "d=curl; systemd-inhibit $d -O x",
+                     "g=git; firejail --quiet $g clone x"):
+            with self.subTest(code):
+                self.assertTrue(any("a package manager or downloader it may run" in p for p in finds(code)[3]),
+                                finds(code))
+        # Names as data, and Omarchy's package helpers (read in the closure): no refusal.
+        for code in ("omarchy-cmd-present curl", "omarchy-pkg-add flatpak", "pgrep -x pacman", 'echo "pacman"',
+                     "chmod +x ~/.local/bin/npm", "pacman -S curl", "command -v yay"):
+            with self.subTest(code):
+                self.assertEqual(finds(code)[3], [])
+        # A plain variable as pacman's argument could hold -y: a note.
+        self.assertTrue(any("from a variable ($pkg)" in n for n in finds('pacman -S --noconfirm "$pkg"')[4]))
+
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)
         self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
