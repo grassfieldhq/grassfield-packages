@@ -1,0 +1,157 @@
+# Build one Grassfield tag (or commit) into the [grassfield] channel tree, as a CI artifact (grassfield ADR-0033 e-h).
+# NOTHING IS PUBLISHED: the publish job below is written and disabled until the owner decides, after the M5 legal review
+# (owner decision 2026-10-27). The build signs with a throwaway key made in the job (ADR-0033 b.7), so the artifact is for
+# review and tests only, never for clients; it carries the keyless grassfield-keyring (U23) until the owner's key exists.
+#
+# Secrets and variables the owner provides later (none exists; the agent creates none):
+#   secret GRASSFIELD_DEPLOY_KEY               read-only deploy key of grassfieldhq/grassfield (O13); without it the build
+#                                              stops at its first step
+#   environment `release` (protected: the owner approves each run), for the publish job only, never on pull requests:
+#     secrets GRASSFIELD_SIGNING_KEY (armored secret key) and GRASSFIELD_SIGNING_PASSPHRASE (O6),
+#     GRASSFIELD_S3_ACCESS_KEY_ID and GRASSFIELD_S3_SECRET_ACCESS_KEY (write access to the bucket only, O8);
+#     variables GRASSFIELD_S3_BUCKET and GRASSFIELD_S3_ENDPOINT
+name: build
+run-name: build ${{ inputs.ref }}
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: grassfield tag (vX.Y.Z, vX.Y.Z-betaN, vX.Y.Z-rcN) or commit
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ inputs.ref }}
+env:
+  IMAGE: archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: The deploy key exists
+        env:
+          DEPLOY_KEY: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+        run: |
+          [ -n "$DEPLOY_KEY" ] || { echo "::error::GRASSFIELD_DEPLOY_KEY is not set (owner decision O13): nothing to build"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          path: packages
+      - uses: actions/checkout@v4
+        with:
+          repository: grassfieldhq/grassfield
+          ssh-key: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: grassfield
+      - name: Build in a throwaway Arch container with Omarchy stable's package set, signed by a throwaway key
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          mkdir -p out
+          docker run --rm -e REF -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/out:/out" \
+            "$IMAGE" bash -euo pipefail -c '
+              trap "cp /build/build.log /out/build.log 2>/dev/null || true" EXIT
+              export GNUPGHOME=$(mktemp -d)
+              gpg --batch --pinentry-mode loopback --passphrase "" \
+                --quick-gen-key "Grassfield CI build (throwaway) <ci@grassfield.invalid>" ed25519 sign 14d 2>/dev/null
+              key=$(gpg --with-colons --list-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
+              /packages/scripts/build-channel.sh --source /grassfield --ref "$REF" --tree /out/tree \
+                --gnupghome "$GNUPGHOME" --key "$key"
+              gpg --export "$key" >/out/build-signing-key.gpg
+              /packages/scripts/check-tree.sh --tree /out/tree --keyring /out/build-signing-key.gpg'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grassfield-channel-${{ github.run_id }}
+          path: out
+          retention-days: 14
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: grassfield-channel-${{ github.run_id }}
+          path: out
+      - name: A fresh Omarchy stable machine installs the built packages; the client answers
+        run: |
+          docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/out:/out:ro" "$IMAGE" \
+            bash /packages/tests/smoke.sh --tree /out/tree --keyring /out/build-signing-key.gpg
+
+  publish:
+    needs: [build, test]
+    # DISABLED: nothing is published until the owner decides, after the M5 legal review. To enable it, the owner removes
+    # this line once the secrets and variables above exist; never on a pull request.
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: packages
+      - uses: actions/checkout@v4
+        with:
+          repository: grassfieldhq/grassfield
+          ssh-key: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: grassfield
+      - name: The published state of both channels (their pointers and current snapshots)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+          BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
+          ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          for c in stable beta; do
+            d=tree/$c/x86_64
+            mkdir -p "$d"
+            aws --endpoint-url "$ENDPOINT" s3 cp "s3://$BUCKET/$c/x86_64/pointer" "$d/pointer" || continue
+            id=$(cat "$d/pointer")
+            aws --endpoint-url "$ENDPOINT" s3 cp --recursive "s3://$BUCKET/$c/x86_64/snap/$id/" "$d/snap/$id/"
+          done
+      - name: Build again with the project's key, on top of the published state
+        env:
+          REF: ${{ inputs.ref }}
+          GRASSFIELD_SIGNING_KEY: ${{ secrets.GRASSFIELD_SIGNING_KEY }}
+          GRASSFIELD_SIGNING_PASSPHRASE: ${{ secrets.GRASSFIELD_SIGNING_PASSPHRASE }}
+        run: |
+          docker run --rm -e REF -e GRASSFIELD_SIGNING_KEY -e GRASSFIELD_SIGNING_PASSPHRASE \
+            -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/tree:/tree" "$IMAGE" bash -euo pipefail -c '
+              export GNUPGHOME=$(mktemp -d)
+              printf "%s" "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+                --import <(printf "%s\n" "$GRASSFIELD_SIGNING_KEY")
+              key=$(gpg --with-colons --list-secret-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
+              /packages/scripts/build-channel.sh --source /grassfield --ref "$REF" --tree /tree --gnupghome "$GNUPGHOME" --key "$key"
+              gpg --export "$key" >/tree/project-key.gpg
+              /packages/scripts/check-tree.sh --tree /tree --keyring /tree/project-key.gpg'
+      - name: Upload in order (ADR-0033 h.2) - packages, then the snapshots, then each pointer, once
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+          BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
+          ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          for c in stable beta; do
+            d=tree/$c/x86_64
+            [ -f "$d/pointer" ] || continue
+            aws --endpoint-url "$ENDPOINT" s3 sync --size-only --exclude '*' --include '*.pkg.tar.zst' --include '*.pkg.tar.zst.sig' \
+              "$d/" "s3://$BUCKET/$c/x86_64/"
+            aws --endpoint-url "$ENDPOINT" s3 sync "$d/snap/" "s3://$BUCKET/$c/x86_64/snap/"
+          done
+          for c in stable beta; do
+            d=tree/$c/x86_64
+            [ -f "$d/pointer" ] || continue
+            aws --endpoint-url "$ENDPOINT" s3 cp --cache-control no-store "$d/pointer" "s3://$BUCKET/$c/x86_64/pointer"
+          done
