@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Interface check (not committed): this PR's release builds, signed by sign-release.sh, published by Grassfield Store
-# step 1's tools/publish.py (grassfield-packages PR #2 head e05f23e, unmerged, copied to /pub), then a client installs
-# and updates from that store. Runs inside a throwaway archlinux:base container; every key is made here and gone with it.
-#   /packages  this repository (ro)    /pub  publish.py and catalog.py of PR #2 (ro)    /ci  the two CI-path builds (ro)
+# The CI path's publication: the release builds of two tags, each built in a fresh tree as build.yml's build job builds it,
+# signed by sign-release.sh as its release job signs them (--published), published by the one publisher
+# (tools/publish.py), then a client installs and updates from that store. Runs inside a throwaway archlinux:base
+# container; every key is made here and gone with it.
+#   /packages  this repository (ro)    /ci  the two CI-path builds (ro)
 set -u
 [[ -f /.dockerenv && $EUID == 0 ]] || { echo "refused: container only"; exit 2; }
 P=/packages
@@ -31,7 +32,7 @@ publish() { # rc: sign its tested release build, keep it, run the channel's publ
   local src=$?
   expect "$rc: sign-release.sh -> exit 0 ($(grep -c ': signed$' "/tmp/sign-$rc.log") signed, $(grep -c 'published file' "/tmp/sign-$rc.log") published file used as it is)" \
     test "$src" == 0 || cat "/tmp/sign-$rc.log"
-  out=$(python3 -I /pub/publish.py --store "$store" --channel beta --releases "$kept" 2>&1); rc_=$?
+  out=$(python3 -I "$P/tools/publish.py" --store "$store" --channel beta --releases "$kept" 2>&1); rc_=$?
   expect "$rc: tools/publish.py -> exit 0 ($out)" test "$rc_" == 0
 }
 view() { # the store as publish.py left it, read by this PR's tools as they are (one pointer format), the edge rule's files
@@ -65,7 +66,7 @@ expect "rc2's build made its own grassfield-keyring 20261027-1, other bytes than
 rel2=$(ls -d /ci/rc2/tree/releases/beta/*/) && rel2=${rel2%/}
 mkdir -p /counter/releases && cp -r "$store" /counter/store && cp -r "$rel2" "/counter/releases/${rel2##*/}"
 "$P/scripts/sign-release.sh" --release "/counter/releases/${rel2##*/}" --gnupghome "$GNUPGHOME" --key "$KP" >/dev/null 2>&1
-out=$(python3 -I /pub/publish.py --store /counter/store --channel beta --releases /counter/releases 2>&1); rc_=$?
+out=$(python3 -I "$P/tools/publish.py" --store /counter/store --channel beta --releases /counter/releases 2>&1); rc_=$?
 expect "counter-case, signed without --published: tools/publish.py refuses it, exit 1 ($out)" test "$rc_" == 1
 publish rc2
 expect "the published grassfield-keyring kept its bytes (an immutable name)" \
@@ -76,7 +77,7 @@ expect "the checker: 1.0.0rc1-3 -> 1.0.0rc2-3 ($(check); notes unverifiable: thi
 pacman -Syu --noconfirm >>/tmp/client.log 2>&1
 expect "pacman -Syu installs 1.0.0rc2-3, all three together" \
   test "$(pacman -Q grassfield-desktop grassfield-compositor grassfield-icons | awk '{print $2}' | sort -u)" == 1.0.0rc2-3
-out=$(python3 -I /pub/publish.py --store "$store" --channel beta --releases "$kept" 2>&1)
+out=$(python3 -I "$P/tools/publish.py" --store "$store" --channel beta --releases "$kept" 2>&1)
 expect "the publisher again, nothing new: nothing written ($out)" grep -q 'nothing new' <<<"$out"
 python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); print("   manifest:", m["release"], m["previous"], len(m["files"]), "files,", m["packages"])' \
   "$store/beta/x86_64/snap/$(python3 -I "$P/scripts/snapshot.py" current "$store/beta/x86_64")/manifest.json"
