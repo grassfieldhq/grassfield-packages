@@ -12,7 +12,7 @@
 #
 # prepare: a package already published under the same name is used as it is, with its signature, which must be by a key
 # keyring/ trusts (a package file name never changes content: grassfield-keyring, which every release names); the
-# release's grassfield-keyring must hold exactly keyring/'s files (a build cannot add a trusted key); repo-add makes the
+# release's grassfield-keyring must be keyring/'s, the whole package (keyring-check.sh); repo-add makes the
 # database again (without --include-sigs it records no signature: pacman fetches each .sig beside its package); every
 # signature that sign must make is removed (the build's throwaway ones, the databases' and the notes').
 # sign: only gpg runs. The release folder must hold nothing but regular files named grassfield.db, grassfield.files,
@@ -23,6 +23,7 @@
 # keyring, in a container without the key, before anything is uploaded. Runs only as root inside a throwaway container.
 # Exit 0, 1 refused or failed, 2 usage.
 set -euo pipefail
+self=$(cd "$(dirname "$0")" && pwd)
 mode=${1:-} release="" gnupghome="" key="" published="" keyring=""
 usage() {
   echo "usage: sign-release.sh prepare --release DIR --keyring DIR [--published DIR]" >&2
@@ -53,13 +54,15 @@ if [[ $mode == prepare ]]; then
   [[ -d $keyring && -z $gnupghome && -z $key ]] || usage
   [[ -z ${GRASSFIELD_SIGNING_KEY+x}${GRASSFIELD_SIGNING_PASSPHRASE+x} ]] ||
     die "refused: prepare reads package contents (repo-add); it runs where the key is not"
+  keyring=$(realpath -m "$keyring")
+  [[ -z $published ]] || published=$(realpath -m "$published")
   cd "$release"
   for f in grassfield.db grassfield.files grassfield-notes.json; do [[ -f $f ]] || die "$release has no $f"; done
   mapfile -t packages < <(ls ./*.pkg.tar.zst 2>/dev/null)
   ((${#packages[@]})) || die "$release holds no package"
   trusted() { # file: file.sig is by a key keyring/ trusts and does not revoke
     local primary
-    primary=$(gpgv --keyring "$(realpath "$keyring/grassfield.gpg")" --status-fd 1 "$1.sig" "$1" 2>/dev/null |
+    primary=$(gpgv --keyring "$keyring/grassfield.gpg" --status-fd 1 "$1.sig" "$1" 2>/dev/null |
       awk '$2 == "VALIDSIG" { print $12 }') || return 1
     [[ -n $primary ]] && grep -q "^$primary:" "$keyring/grassfield-trusted" && ! grep -q "^$primary" "$keyring/grassfield-revoked"
   }
@@ -74,17 +77,10 @@ if [[ $mode == prepare ]]; then
       rm -f "$b.sig"
     fi
   done
-  # The keyring this release ships is the one in git, byte for byte (review minor 2).
+  # The keyring this release ships is the one in git: the whole package (scripts/keyring-check.sh).
   k=$(ls ./grassfield-keyring-*.pkg.tar.zst 2>/dev/null | head -n 1)
   [[ -n $k ]] || die "$release holds no grassfield-keyring"
-  kx=$(mktemp -d)
-  bsdtar -xf "$k" -C "$kx" usr/share/grassfield/pacman-keyring || die "cannot read $k"
-  for f in grassfield.gpg grassfield-trusted grassfield-revoked; do
-    [[ $(sha256sum <"$kx/usr/share/grassfield/pacman-keyring/$f") == "$(sha256sum <"$keyring/$f")" ]] ||
-      die "${k#./}: $f is not keyring/$f"
-  done
-  [[ $(ls "$kx/usr/share/grassfield/pacman-keyring" | wc -l) == 3 ]] || die "${k#./} holds other files than keyring/'s three"
-  rm -rf "$kx"
+  "$self/keyring-check.sh" "$k" "$keyring" || die "${k#./} is not keyring/'s"
   work=$(mktemp -d)
   repo-add --quiet "$work/grassfield.db.tar.gz" "${packages[@]}" >/dev/null || die "repo-add"
   cp -L "$work/grassfield.db.tar.gz" grassfield.db

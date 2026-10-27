@@ -9,8 +9,8 @@
 #                   package its own database names, whose primary is in that keyring's grassfield-trusted and not in its
 #                   grassfield-revoked (gpgv's VALIDSIG argument 10). For the project's key: the release job, the tests
 #                   whose keyring carries their key
-#   --keyring-src DIR  with --trusted: that grassfield-keyring must hold exactly DIR's grassfield.gpg, grassfield-trusted
-#                   and grassfield-revoked, byte for byte (keyring/ in git: a build cannot add a trusted key)
+#   --keyring-src DIR  with --trusted: that grassfield-keyring package must be DIR's (keyring/ in git), the whole package:
+#                   its paths, its three files and install script byte for byte, its .PKGINFO (scripts/keyring-check.sh)
 # For each <channel>/x86_64 with a pointer ({"snapshot": "<id>"}), the snapshot it names, and for each release build
 # releases/<channel>/<version> (what the channel's publisher reads, ADR-0037 g): grassfield.db, grassfield.files and
 # grassfield-notes.json, each with a valid signature; a snapshot's manifest.json names each of its files with its SHA-256;
@@ -35,7 +35,7 @@ while (($#)); do
   shift
 done
 [[ -d $tree && (-s $keyring && -z $trusted || -z $keyring && -n $trusted) ]] || usage
-[[ -z $src || -n $trusted && -f $src/grassfield-trusted ]] || usage
+[[ -z $src || -n $trusted && -f $src/PKGBUILD ]] || usage
 [[ -z $keyring ]] || keyring=$(realpath "$keyring")
 fails=0
 ok() { echo "PASS: $*"; }
@@ -61,13 +61,12 @@ keyring_of() { # label, the database, the folder of its packages: the keys that 
   k=$k/usr/share/grassfield/pacman-keyring
   keyring=$k/grassfield.gpg
   if [[ -n $src ]]; then
-    local same=1 n
-    [[ $(LC_ALL=C ls "$k" | tr "\n" " ") == "grassfield-revoked grassfield-trusted grassfield.gpg " ]] || same=""
-    for n in grassfield.gpg grassfield-trusted grassfield-revoked; do
-      [[ $(sha256sum <"$k/$n" 2>/dev/null) == "$(sha256sum <"$src/$n")" ]] || same=""
-    done
-    [[ -n $same ]] && ok "$1: its grassfield-keyring holds exactly $src's files" ||
-      { bad "$1: its grassfield-keyring ($f) is not $src's: refused"; keyring=/dev/null allowed="" denied=""; return; }
+    local why
+    if why=$("$here/scripts/keyring-check.sh" "$3/$f" "$src" 2>&1); then
+      ok "$1: its grassfield-keyring is $src's, the whole package"
+    else
+      bad "$1: its grassfield-keyring is not $src's: refused ($why)"; keyring=/dev/null allowed="" denied=""; return
+    fi
   fi
   allowed=$(sed -n 's/^\([0-9A-F]\{40\}\):.*/\1/p' "$k/grassfield-trusted")
   denied=$(sed -n 's/^\([0-9A-F]\{40\}\).*/\1/p' "$k/grassfield-revoked")
