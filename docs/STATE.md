@@ -247,6 +247,20 @@ Last updated: 2026-10-28
     mutants of the rule (the first word only, no unwrapping, `+` anywhere, run-parts' old test, `sh` among FIND_HANDS,
     what a refused action runs not read) each fail it. The CI check job replayed in a throwaway container: `validate:
     ok`, the facts (15848 packages, 51 entries, 1604 AppStream components), `check-env: ok`, 43 pins.
+  - The integrator's re-review of 91e7c66 (opus, FAIL, one MAJOR in the same class): the wrapper tables missed options
+    that take an argument (`env -a`/`--argv0`, `xargs -E`, `sudo --prompt`, doas's `-a`, run0's `--description`), so
+    the scan read that argument as the command (`-exec env -a rm bash {} \;` passed and ran the file; outside find,
+    `env -a rm bash "$OMARCHY_PATH/hidden/run.sh"` too). Now each wrapper lists its options that take an argument and its
+    flags; any other option is refused ("an option the scan does not know"), which also refuses those that run a command
+    string of their own (`env -S`, `flock -c`, `runuser -c`, `sudo -s`/`-i`); `--opt=value` and grouped flags (`-nl`)
+    are read. A find action handed `{}` runs no wrapper at all: its first word is one of FIND_HANDS. Tests: 58 OK (each
+    case of the re-review with each of -exec, -execdir, -ok and -okdir; the outside-find case; nine unknown options
+    refused; every wrapper form of Omarchy v4.0.4's files still read); 6 mutants of the change (an unknown option
+    skipped, find unwrapping again, env's `-a` unlisted, timeout's `--kill-after` unlisted, no grouped flags, no `=`
+    form) each fail them. The six recipes of the three setups pass the scan against the Omarchy 4.0.4 checkout and the
+    43 pins match (catalog.recipe_problems and pin_problems, facts of 2026-10-27); the full CI replay could not fetch
+    Omarchy's mirror (`extra.files` too slow, three tries), and with the facts of 2026-10-27 check-env reports only the 10
+    catalog apps added since those facts were made.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53

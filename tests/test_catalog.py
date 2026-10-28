@@ -566,6 +566,25 @@ class Recipes(unittest.TestCase):
         self.script("omarchy-install-directvar", 'h=install\n"$OMARCHY_PATH/$h/run.sh"')
         self.assertIn("runs a file outside the pinned files ($OMARCHY_PATH/$h/run.sh)",
                       "\n".join(rp(self.omarchy, "omarchy-install-directvar", [], repo)))
+        # A wrapper option the scan does not know is refused, whatever follows: env -a takes an argument ("rm"), which the
+        # scan would otherwise read as the command (PR #10's re-review); env -S and flock -c run a command string.
+        self.script("omarchy-install-argv0", 'env -a rm bash "$OMARCHY_PATH/hidden/run.sh"')
+        self.assertIn("bash runs a script outside the pinned files ($OMARCHY_PATH/hidden/run.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-argv0", [], repo)))
+        for code in ('env --block-signal rm bash x.sh', 'env -S "bash x.sh"', 'flock -c "bash x.sh" /tmp/l',
+                     'sudo -s bash x.sh', 'runuser -u u -c "bash x.sh"', 'nice -10 bash x.sh', 'systemd-run -S',
+                     'xargs -e rm bash x.sh', 'uwsm-app --weird -- bash x.sh'):
+            with self.subTest(code):
+                self.assertIn("an option the scan does not know", "\n".join(catalog.command_findings(code, repo)[3]))
+        # Omarchy's own wrapper options read as before (each form found in v4.0.4's files).
+        for code in ("uwsm-app -- true", "env -u BROWSER true", "flock -n 9 true", "flock -w 5 /tmp/l true",
+                     "timeout --kill-after=1s 5 true", "sudo -n true", "sudo -v", "sudo -n -l -l", "sudo -u root true",
+                     "sudo -E true", "xargs -r true", "xargs -a /tmp/f true", "setsid -f true", "setsid --fork true",
+                     'systemd-run --user --collect --quiet --on-active="2s" --timer-property=AccuracySec=100ms true',
+                     'systemd-run --user --quiet --collect --unit="omarchy-x" true', "runuser -u u true", "exec -- true",
+                     "sudo -nl true"):
+            with self.subTest(code):
+                self.assertNotIn("an option the scan does not know", "\n".join(catalog.command_findings(code, repo)[3]))
         self.script("omarchy-install-elsewhere", "bash /tmp/x.sh")
         self.assertIn("bash runs a script outside the pinned files (/tmp/x.sh)",
                       "\n".join(rp(self.omarchy, "omarchy-install-elsewhere", [], repo)))
@@ -663,6 +682,16 @@ class Recipes(unittest.TestCase):
                      r"find /x -exec python3 -c 'x' {} \;", r"find /x -exec ./{} \;"):
             with self.subTest(code):
                 self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
+        # PR #10's re-review: a wrapper's option that takes an argument, missing from its table, put that argument in the
+        # command's place (env -a rm bash {}: "rm" read as the command). A find action handed {} runs no wrapper at all,
+        # with each of -exec, -execdir, -ok and -okdir.
+        for action in ("-exec", "-execdir", "-ok", "-okdir"):
+            for wrapped in ("env -a rm bash", "env --argv0 rm bash", "xargs -E rm bash", "sudo --prompt rm bash",
+                            "doas -a rm bash", "run0 --description rm bash", "sudo chmod 644", "env rm",
+                            "timeout --kill-after=1s 5 rm"):
+                code = f"find /x {action} {wrapped} {{}} \\;"
+                with self.subTest(code):
+                    self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
         for code in ("run-parts -a --list /etc/x.d", "run-parts --list --report /etc/x.d", "run-parts --test",
                      "run-parts --list /etc/x.d /etc/y.d", "run-parts --regex x --list /etc/x.d"):
             with self.subTest(code):
@@ -670,7 +699,7 @@ class Recipes(unittest.TestCase):
         # Nothing run: copies, a listing, a quoted or escaped semicolon elsewhere, Omarchy's own find (browser-policy.sh).
         for code in (r"find /x -name '*.desktop' -exec cp {} /y \;", "run-parts --list /etc/x.d", "run-parts --test /etc/x.d",
                      "echo ';'", r"echo a\;b", 'find "$dir" -mindepth 1 -maxdepth 1 ! -user root -exec rm -rf -- {} +',
-                     r"find /x -exec sudo chmod 644 {} \;", "find /x -type f -exec sha256sum {} +"):
+                     r"find /x -exec chmod 644 {} \;", "find /x -type f -exec sha256sum {} +"):
             with self.subTest(code):
                 self.assertEqual(finds(code)[:4], (False, False, [], []))
         # In a recipe: refused.

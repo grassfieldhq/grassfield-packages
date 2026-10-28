@@ -65,9 +65,10 @@ pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bu
    (`bash "$OMARCHY_PATH/$h/run.sh"`, `./hidden.sh`, a path made at run time, a `PATH` naming another folder, the files
    `find -exec` finds, a folder `run-parts` runs), hands a package manager or a downloader to a command it does not know
    (`firejail "$pm" -Sy`), or cannot be read as shell. The command `find -exec`, `-execdir`, `-ok` or `-okdir` runs is read
-   as a command; handed the files found (`{}`), it must be, after its wrappers (`sudo`, `env`, `timeout`...), one that
-   only copies, moves, removes, changes or reads a file (`rm`, `cp`, `chmod`...), and a `+` ends it only right after
-   `{}`; `run-parts` is accepted only as `--list DIR` or `--test DIR`. Such a setup is not offered.
+   as a command; handed the files found (`{}`), it must be, with no wrapper in front, one that only copies, moves,
+   removes, changes or reads a file (`rm`, `cp`, `chmod`...), and a `+` ends it only right after `{}`; `run-parts` is
+   accepted only as `--list DIR` or `--test DIR`. A wrapper's option the scan does not list (`env -a`, `env -S`,
+   `flock -c`, `sudo -s`...) is refused wherever it appears. Such a setup is not offered.
 3. Otherwise it writes the pins and lists every new, changed and removed file, and what it could not resolve ("read: …":
    a command named by a variable, a variable or a substitution handed to a command it does not know). Read each listed file before committing `omarchy.lock`: the pin says nobody changed it, not that it is
    safe.

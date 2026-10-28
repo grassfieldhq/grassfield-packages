@@ -117,27 +117,58 @@ TERMINAL_RUNNERS = {"xdg-terminal-exec"}
 # #7's merge, PR #10's review). Its ";", escaped or quoted on its own (\; ';' ";"), is a word, not the shell's separator:
 # prepare() writes it FIND_END.
 FIND_RUNS = {"-exec", "-execdir", "-ok", "-okdir"}
-# What an action handed the files found ("{}") may be, after its wrappers: commands that copy, move, remove, change or
-# read a file, and never run it. Anything else (a shell, an interpreter, busybox, the file itself) is refused: the files
-# find finds are outside the pinned files.
+# What an action handed the files found ("{}") may be, its first word, no wrapper in front: commands that copy, move,
+# remove, change or read a file, and never run it. Anything else (a wrapper, a shell, an interpreter, busybox, the file
+# itself) is refused: the files find finds are outside the pinned files.
 FIND_HANDS = {"rm", "rmdir", "cp", "mv", "ln", "install", "chmod", "chown", "chgrp", "touch", "stat", "cat", "ls",
               "readlink", "realpath", "basename", "dirname", "sha256sum", "cmp", "grep", "echo", "printf"}
 FIND_END = "__find_end__"
 LONE_SEMICOLON = re.compile(r"(?<!\S)(?:\\;|';'|\";\")(?!\S)")
 DYNAMIC_OMARCHY = re.compile(r"\bomarchy-[a-z0-9-]*\$")
-# Programs that run the command after them: (their options that take an argument, how many plain arguments come first).
+# Programs that run the command after them: (their options that take an argument, their options that take none, how many
+# plain arguments come first). An option on neither list is refused (grassfield-packages PR #10's re-review): one that
+# takes an argument would otherwise put that argument in the command's place, and a few run a command string of their
+# own (env -S, flock -c, runuser -c, sudo -s and -i), which no list holds.
 WRAPPERS = {
-    "sudo": ({"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-R", "-T", "--user", "--group"}, 0),
-    "doas": ({"-u", "-C"}, 0), "run0": ({"-u", "--user", "-g", "--group", "-D", "--chdir"}, 0), "pkexec": ({"--user"}, 0),
-    "env": ({"-u", "-C", "-S", "--unset", "--chdir"}, 0), "command": (set(), 0), "builtin": (set(), 0),
-    "exec": ({"-a"}, 0), "nohup": (set(), 0), "setsid": (set(), 0), "nice": ({"-n"}, 0), "ionice": ({"-c", "-n"}, 0),
-    "stdbuf": ({"-i", "-o", "-e"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
-    "flock": ({"-w", "-E", "--timeout", "--conflict-exit-code"}, 1), "xargs": ({"-I", "-n", "-P", "-d", "-a", "-L"}, 0),
-    "uwsm-app": (set(), 0), "systemd-run": ({"-u", "--unit", "-p", "--property", "--uid", "--gid", "-E", "--setenv",
-                                            "--description", "--slice", "-M", "--machine", "-H", "--host",
-                                            "--working-directory"}, 0),
-    "runuser": ({"-u", "-g", "-G", "--user", "--group", "--supp-group"}, 0), "chroot": ({"--userspec", "--groups"}, 1),
-    "unshare": (set(), 0), "watch": ({"-n", "--interval", "-d"}, 0),
+    "sudo": ({"-u", "--user", "-g", "--group", "-C", "--close-from", "-h", "--host", "-p", "--prompt", "-U",
+              "--other-user", "-r", "--role", "-t", "--type", "-D", "--chdir", "-R", "--chroot", "-T",
+              "--command-timeout"},
+             {"-A", "--askpass", "-b", "--background", "-B", "--bell", "-E", "--preserve-env", "-H", "--set-home", "-k",
+              "--reset-timestamp", "-K", "--remove-timestamp", "-l", "--list", "-n", "--non-interactive", "-N",
+              "--no-update", "-P", "--preserve-groups", "-S", "--stdin", "-v", "--validate"}, 0),
+    "doas": ({"-u", "-C", "-a"}, {"-n", "-L"}, 0),
+    "run0": ({"-u", "--user", "-g", "--group", "-D", "--chdir", "--description", "--slice", "--unit", "--property",
+              "--nice", "--setenv", "--background", "--machine"}, {"--no-ask-password"}, 0),
+    "pkexec": ({"--user"}, {"--keep-cwd", "--disable-internal-agent"}, 0),
+    "env": ({"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}, {"-i", "--ignore-environment", "-", "-0", "--null",
+                                                                  "-v", "--debug"}, 0),
+    "command": (set(), {"-p"}, 0), "builtin": (set(), set(), 0), "exec": ({"-a"}, {"-c", "-l"}, 0),
+    "nohup": (set(), set(), 0), "setsid": (set(), {"-c", "--ctty", "-f", "--fork", "-w", "--wait"}, 0),
+    "nice": ({"-n", "--adjustment"}, set(), 0), "ionice": ({"-c", "--class", "-n", "--classdata"}, {"-t", "--ignore"}, 0),
+    "stdbuf": ({"-i", "--input", "-o", "--output", "-e", "--error"}, set(), 0),
+    "timeout": ({"-s", "--signal", "-k", "--kill-after"}, {"--foreground", "--preserve-status", "-v", "--verbose"}, 1),
+    "flock": ({"-w", "--wait", "--timeout", "-E", "--conflict-exit-code"},
+              {"-s", "--shared", "-x", "-e", "--exclusive", "-u", "--unlock", "-n", "--nb", "--nonblock", "-o",
+               "--close", "-F", "--no-fork", "--verbose"}, 1),
+    "xargs": ({"-I", "--replace", "-n", "--max-args", "-P", "--max-procs", "-d", "--delimiter", "-a", "--arg-file",
+               "-L", "--max-lines", "-E", "--eof", "-s", "--max-chars", "--process-slot-var"},
+              {"-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p", "--interactive", "-x", "--exit",
+               "-o", "--open-tty"}, 0),
+    "uwsm-app": ({"-s", "-t", "-a", "-u", "-d", "-S"}, {"-T"}, 0),
+    "systemd-run": ({"-u", "--unit", "-p", "--property", "--uid", "--gid", "-E", "--setenv", "--description",
+                     "--slice", "-M", "--machine", "-H", "--host", "--working-directory", "--nice", "--service-type",
+                     "--on-active", "--on-boot", "--on-startup", "--on-unit-active", "--on-unit-inactive",
+                     "--on-calendar", "--timer-property", "--path-property", "--socket-property"},
+                    {"--user", "--system", "--scope", "--wait", "-q", "--quiet", "--collect", "-G", "--no-block",
+                     "--no-ask-password", "-t", "--pty", "-P", "--pipe", "--same-dir", "-d", "-r",
+                     "--remain-after-exit", "--send-sighup"}, 0),
+    "runuser": ({"-u", "-g", "-G", "--user", "--group", "--supp-group", "-w", "--whitelist-environment"},
+                {"-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty"}, 0),
+    "chroot": ({"--userspec", "--groups"}, {"--skip-chdir"}, 1),
+    "unshare": (set(), {"-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net", "-p", "--pid", "-U", "--user",
+                        "-C", "--cgroup", "-T", "--time", "-f", "--fork", "-r", "--map-root-user", "--mount-proc"}, 0),
+    "watch": ({"-n", "--interval"}, {"-t", "--no-title", "-b", "--beep", "-e", "--errexit", "-g", "--chgexit", "-c",
+                                     "--color", "-x", "--exec", "-p", "--precise"}, 0),
 }
 PACKAGE_MANAGERS = {"pacman", "yay", "paru"}
 AUR_HELPERS = {"yay", "paru"}
@@ -944,15 +975,26 @@ def run_time_name(word, literals):
 
 
 def after_wrapper(words, problems):
-    """The words after the wrapper words[0] and its options (WRAPPERS): the command it runs."""
-    takes, plain = WRAPPERS[os.path.basename(words[0])]
+    """The words after the wrapper words[0] and its options (WRAPPERS): the command it runs; None, with the problem, when
+    an option is on neither of its lists (it could take the command's place, or run a command string of its own)."""
+    wrapper = os.path.basename(words[0])
+    takes, flags, plain = WRAPPERS[wrapper]
     words = words[1:]
     while words:
-        if words[0] == "--":
+        word = words[0]
+        if word == "--":
             return words[1:]
-        if words[0].startswith("-"):
-            words = words[2:] if words[0] in takes else words[1:]
-        elif ASSIGNMENT.match(words[0]):
+        if word.startswith("-") and word != "-" and "=" in word and word.split("=", 1)[0] in takes:
+            words = words[1:]  # --unit=x
+        elif word in takes:
+            words = words[2:]
+        elif word in flags or (re.fullmatch(r"-[A-Za-z0-9]{2,}", word) and all("-" + c in flags for c in word[1:])):
+            words = words[1:]  # -n, or -nl: flags together
+        elif word.startswith("-"):
+            problems.append(f"{wrapper} {word}: an option the scan does not know (it may take an argument, which would "
+                            "stand for the command, or run a command of its own)")
+            return None
+        elif ASSIGNMENT.match(word):
             problems.extend(path_problems(words[0]))  # env PATH=...
             words = words[1:]
         elif plain:
@@ -979,6 +1021,8 @@ def read_command(words, literals, problems, notes, depth):
             if base == "command" and len(words) > 1 and words[1] in ("-v", "-V"):
                 return out  # command -v NAME: is NAME there, nothing run
             words = after_wrapper(words, problems)
+            if words is None:
+                return out
         else:
             break
     if not words:
@@ -1067,12 +1111,11 @@ def read_command(words, literals, problems, notes, depth):
             while j < len(args) and not (args[j] == FIND_END or (args[j] == "+" and args[j - 1] == "{}")):
                 j += 1
             run = args[i + 1:j]
-            handed = run
-            while handed and os.path.basename(handed[0]) in WRAPPERS:
-                handed = after_wrapper(handed, problems)
-            if any("{}" in word for word in run) and (not handed or os.path.basename(handed[0]) not in FIND_HANDS):
+            # Handed the files found, the action runs no wrapper (Omarchy's own find lines use none): its first word is
+            # one of FIND_HANDS, else it is refused.
+            if any("{}" in word for word in run) and os.path.basename(run[0]) not in FIND_HANDS:
                 problems.append(f"find {args[i]} runs the files it finds: they are outside the pinned files")
-            if handed and "{}" not in handed[0]:
+            if run and "{}" not in run[0]:
                 out += read_command(run, literals, problems, notes, depth + 1)  # what it runs, judged as any command
             i = j + 1
     elif base == "run-parts" and not (len(args) == 2 and args[0] in ("--list", "--test") and not args[1].startswith("-")):
