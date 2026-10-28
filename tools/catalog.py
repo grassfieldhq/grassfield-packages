@@ -110,6 +110,12 @@ HEREDOC = re.compile(r"(?<!<)<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 SHELL_FROM_INPUT = re.compile(r"(^|[|;&(\s])(sudo\s+)?(sh|bash|zsh|dash|ksh|python3?|perl|ruby|node)(\s+-[A-Za-z-]*)*\s*$")
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
+# An interpreter's options that run code given as text or a module, not a file (in a group of short options too: -uc),
+# and those that take the next word as their argument (-W ignore, -I dir, -r lib) or written in the same word (-Idir).
+INTERPRETER_CODE = set("ceEm")
+INTERPRETER_TAKES = {"-W", "-X", "-I", "-r", "--require"}
+# A word that names a script by its suffix: handed to a command the scan does not know, it may be run.
+SCRIPT_FILE = re.compile(r"\.(sh|bash|zsh|ksh|py|pl|rb|js|mjs|cjs|lua)\Z")
 NETWORK = re.compile(r"\b(urllib|urlopen|requests|http\.client|httpx|aiohttp|pycurl|socket|ftplib|LWP|HTTP::Tiny|"
                      r"Net::HTTP|open-uri|fetch\s*\()")
 TERMINAL_RUNNERS = {"xdg-terminal-exec"}
@@ -192,9 +198,20 @@ NAMES_AS_DATA = {"echo", "printf", "which", "type", "hash", "whereis", "pgrep", 
                  "stat", "dirname", "basename", "realpath", "logger", "notify-send", "kill", "wait", "exit", "return",
                  "shift", "set", ":", "omarchy-cmd-present", "omarchy-cmd-missing", "omarchy-pkg-add",
                  "omarchy-pkg-drop", "omarchy-pkg-missing", "omarchy-pkg-present", "omarchy-pkg-aur-add",
-                 "omarchy-pkg-aur-accessible"}
+                 "omarchy-pkg-aur-accessible", "useradd", "usermod", "chsh"}
+# Commands whose arguments the scan reads in its own way (a script, find's actions, a sourced file, gum's command, a
+# trap's code): not "a command the scan does not know" below.
+READ_ON_THEIR_OWN = SHELLS | INTERPRETERS | {"find", "run-parts", "source", ".", "gum", "trap", "eval"}
 # One word that is all a variable or a substitution: what a command the scan does not know is handed, unknown.
 WHOLE_RUN_TIME = re.compile(r"^(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$\{[^}]*\}|\$[0-9@*]|__subst__|__subst_process__)$")
+OMARCHY_NAME = re.compile(r"omarchy-[a-z0-9-]+\Z")
+
+
+def runs_what_it_is_handed(base):
+    """A command the scan does not know (firejail, chrt, strace, systemd-cat, a shell function...): it may run what it is
+    handed. Omarchy's own commands are read where they are written; the scan's known commands are read their own way."""
+    return base not in RUN_THROUGH | NAMES_AS_DATA | TERMINAL_RUNNERS | READ_ON_THEIR_OWN and \
+        not base.startswith("omarchy-")
 FUNCTION = re.compile(r"(?m)^\s*(?:function\s+([A-Za-z_][A-Za-z0-9_:-]*)|([A-Za-z_][A-Za-z0-9_:-]*)\s*\(\s*\))")
 # What mise does without fetching anything (where, ls, rm...); every other mise command may install.
 MISE_LOCAL = {"where", "ls", "list", "current", "which", "rm", "remove", "uninstall", "unuse", "activate", "version",
@@ -1070,6 +1087,13 @@ def read_command(words, literals, problems, notes, depth):
                 continue
             for value in sorted(v for v in values if os.path.basename(v) in RUN_THROUGH):
                 problems.append(f"{base} is handed {value} ({arg}): a package manager or downloader it may run")
+    if runs_what_it_is_handed(base):
+        # chrt -f 1 bash x.sh, firejail python3 -c '...': a shell or an interpreter, by its name or a system folder's path,
+        # with words after it, runs them; what it runs is read as a command (its script judged against the pins).
+        for k, arg in enumerate(args[:-1]):
+            if os.path.basename(arg) in SHELLS | INTERPRETERS and ("/" not in arg or arg.startswith(SYSTEM_BIN)):
+                out += read_command(args[k:], literals, problems, notes, depth + 1)
+                break
     if base == "eval":
         problems.append("eval: code made at run time")
     elif base in SHELLS:
@@ -1152,6 +1176,32 @@ def shell_operand(args):
     return ("input", None) if args[i] == "-" else ("file", args[i])
 
 
+def interpreter_operand(args):
+    """The script file an interpreter runs, or None when it runs code given as text (-c, -e), a module (-m) or its
+    input (no operand, or "-")."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if a in INTERPRETER_TAKES:
+            i += 2
+        elif a[:2] in INTERPRETER_TAKES:
+            i += 1  # -Idir, -Wignore: the argument in the same word
+        elif a in ("--eval", "--print", "--module"):
+            return None
+        elif a.startswith("--"):
+            i += 1
+        elif a.startswith("-") and len(a) > 1:
+            if set(a[1:]) & INTERPRETER_CODE:
+                return None
+            i += 1
+        else:
+            break
+    return args[i] if i < len(args) and args[i] != "-" else None
+
+
 def aur_names(names, repo):
     """Names an AUR install would build: those no repository serves, or that are known only at run time."""
     built = []
@@ -1214,8 +1264,10 @@ def command_findings(code, repo=None, functions=()):
     return sync, download, built, problems, notes
 
 
-def outside_closure(code, pinned):
-    """An Omarchy command, or a file sourced or run, that the closure did not follow (so neither pinned nor scanned)."""
+def outside_closure(code, pinned, omarchy=None, notes=None):
+    """An Omarchy command, or a file sourced or run, that the closure did not follow (so neither pinned nor scanned).
+    omarchy: the checkout, to tell one of its folders from a file it lacks; notes: a list for what the person should
+    look at, when given."""
     def is_pinned(word):
         m = OMARCHY_FILE.match(word)
         return m is not None and m.group(1) in pinned
@@ -1231,8 +1283,32 @@ def outside_closure(code, pinned):
             how, script = shell_operand(args)
             if how == "file" and PLACEHOLDER not in script and not is_pinned(script):
                 found.append(f"{cmd} runs a script outside the pinned files ({script})")
+        if cmd in INTERPRETERS:
+            script = interpreter_operand(args)
+            if script is not None and PLACEHOLDER not in script and not is_pinned(script):
+                found.append(f"{cmd} runs a script outside the pinned files ({script})")
         if "/" in cmd and not is_pinned(cmd):  # a path made at run time, or a file of Omarchy's the closure lacks
             found.append(f"runs a file outside the pinned files ({cmd})")
+        if not runs_what_it_is_handed(cmd):
+            continue
+        # A command the scan does not know may run what it is handed (grassfield #34's merge note): a file of Omarchy's
+        # the closure did not pin (one the release lacks), an Omarchy command the release lacks, or a script outside the
+        # pins is refused; one of Omarchy's folders (quickshell -p "$OMARCHY_PATH/shell") is a note: its files are not
+        # pinned. Its other words (a path in the home folder, a device) are data the scan cannot tell from a program.
+        for word in args:
+            m = OMARCHY_FILE.match(word)
+            if m and m.group(1) in pinned:
+                continue
+            if m and omarchy is not None and os.path.isdir(os.path.join(omarchy, m.group(1))):
+                if notes is not None:
+                    notes.append(f"{cmd} is handed Omarchy's folder {m.group(1).rstrip('/')}: its files are not pinned; "
+                                 "read what it does with them")
+            elif m:
+                found.append(f"{cmd} is handed a file outside the pinned files ({word}): it may run it")
+            elif OMARCHY_NAME.match(word) and f"bin/{word}" not in pinned:
+                found.append(f"{cmd} is handed an Omarchy command outside the pinned files ({word}): it may run it")
+            elif SCRIPT_FILE.search(word) and PLACEHOLDER not in word:
+                found.append(f"{cmd} is handed a script outside the pinned files ({word}): it may run it")
     return found
 
 
@@ -1258,6 +1334,7 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         plain = code.replace("\\\n", "").replace('"', "").replace("'", "")
         sync, download, built, other, seen = command_findings(code, repo, functions)
+        outside = outside_closure(code, pinned, omarchy, seen)
         if notes is not None:
             notes += [f"{rel}: {note}" for note in sorted(set(seen))]
         if sync or SYNC.search(plain):
@@ -1269,7 +1346,7 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
             built = []
         if built:
             problems.append(f"{name} builds from the AUR (through {rel}): {', '.join(sorted(set(built)))} (ADR-0037 a)")
-        for problem in sorted(set(other) | set(outside_closure(code, pinned))):
+        for problem in sorted(set(other) | set(outside)):
             problems.append(f"{name} cannot be judged (through {rel}): {problem}")
     with open(path, encoding="utf-8", errors="replace") as f:
         own = f.read()

@@ -706,6 +706,51 @@ class Recipes(unittest.TestCase):
         self.script("omarchy-install-find", r"find ~/.config -name x -exec pacman -Sy {} \;")
         self.assertIn("syncs pacman's databases", "\n".join(catalog.recipe_problems(self.omarchy, "omarchy-install-find", [], {"game"})))
 
+    def test_what_pr_10s_merge_left(self):
+        # The integrator's merge note of PR #10 (and grassfield #34): a command the scan does not know, handed a shell and
+        # a script, a file of Omarchy's the release lacks or a script, may run it; and an interpreter's own script.
+        os.makedirs(os.path.join(self.omarchy, "shell"))
+        for rel, text in (("install/ok.sh", "echo ok\n"), ("install/ok.py", "print(1)\n")):
+            with open(os.path.join(self.omarchy, rel), "w") as f:
+                f.write(text)
+
+        def judged(code):
+            self.script("omarchy-install-runner", code)
+            notes = []
+            return "\n".join(catalog.recipe_problems(self.omarchy, "omarchy-install-runner", [], {"game"}, notes)), notes
+        for code, problem in (
+                ('chrt -f 1 bash "$OMARCHY_PATH/hidden/run.sh"', "bash runs a script outside the pinned files "
+                                                                  "($OMARCHY_PATH/hidden/run.sh)"),
+                ('chrt -f 1 bash "$OMARCHY_PATH/hidden/run.sh"', "chrt is handed a file outside the pinned files "
+                                                                  "($OMARCHY_PATH/hidden/run.sh): it may run it"),
+                ("firejail bash /tmp/x", "bash runs a script outside the pinned files (/tmp/x)"),
+                ("strace -f /usr/bin/python3 -W ignore /tmp/x", "python3 runs a script outside the pinned files (/tmp/x)"),
+                ('firejail /usr/bin/bash -c "pacman -Syu"', "syncs pacman's databases"),
+                ('chrt -f 1 "$OMARCHY_PATH/hidden/run"', "chrt is handed a file outside the pinned files"),
+                ("firejail /tmp/x.sh", "firejail is handed a script outside the pinned files (/tmp/x.sh): it may run it"),
+                ("taskset 1 omarchy-missing", "taskset is handed an Omarchy command outside the pinned files "
+                                              "(omarchy-missing): it may run it"),
+                ('as_root() { sudo "$@"; }\nas_root bash /tmp/x', "bash runs a script outside the pinned files (/tmp/x)"),
+                ("python3 /tmp/x.py", "python3 runs a script outside the pinned files (/tmp/x.py)"),
+                ("python3 -u -W ignore /tmp/x.py", "python3 runs a script outside the pinned files (/tmp/x.py)"),
+                ("perl ./x.pl", "perl runs a script outside the pinned files (./x.pl)"),
+                ('node "$OMARCHY_PATH/hidden/x.js"', "node runs a script outside the pinned files ($OMARCHY_PATH/hidden/x.js)")):
+            with self.subTest(code):
+                self.assertIn(problem, judged(code)[0])
+        # Read as before: a pinned script through a runner, code given as text or a module, a login shell named as data,
+        # a file in the home folder, a shell with nothing after it (it reads its terminal).
+        for code in ('chrt -f 1 bash "$OMARCHY_PATH/install/ok.sh"', 'python3 "$OMARCHY_PATH/install/ok.py"',
+                     'python3 -c "print(1)"', 'python3 -uc "print(1)"', "python3 -m json.tool f", 'perl -ne "print" f',
+                     'node -e "1"', "useradd -m -s /bin/bash u", "usermod -s /bin/zsh u", "chsh -s /bin/zsh",
+                     'sed -i "s/a/b/" ~/.config/x.conf', "firejail bash"):
+            with self.subTest(code):
+                self.assertEqual(judged(code), ("", []))
+        # One of Omarchy's folders (Omarchy's own: quickshell -p "$OMARCHY_PATH/shell"): its files are not pinned, a note.
+        problems, notes = judged('systemd-cat -t s -- quickshell -n -p "$OMARCHY_PATH/shell"')
+        self.assertEqual(problems, "")
+        self.assertEqual(notes, ["bin/omarchy-install-runner: systemd-cat is handed Omarchy's folder shell: its files are not "
+                                 "pinned; read what it does with them"])
+
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)
         self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
