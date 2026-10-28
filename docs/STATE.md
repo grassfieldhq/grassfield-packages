@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-10-27
+Last updated: 2026-10-28
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -220,6 +220,22 @@ Last updated: 2026-10-27
 - Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
+- 2026-10-28, Grassfield Store step 3b1 (this repository's half; branch `claude/pensive-thompson-fhk5um` restarted from main
+  afe089c after grassfield PR #30's merge; grassfield's half is its PR of the same branch, ADR-0037 g amended there):
+  - The catalog publishes the release and the pins (`"omarchy": {"tag", "commit", "files"}`, read from `omarchy.lock`), so
+    the Store can refuse a setup when the installed Omarchy differs from them (the note carried from PR #4 above).
+    `validate_catalog` requires the object when the catalog has a setup, with both of its recipes pinned (`bin/<name>`),
+    a tag like v4.0.4, a 40-digit commit, 1 to 512 relative paths without `.` or `..` segments and their SHA-256;
+    `catalog.py pin` does not check it (it writes the pins).
+  - The scan gap of PR #7's merge (task 31): the command `find -exec`, `-execdir`, `-ok` or `-okdir` runs is read as a
+    command (a lone `\;`, `';'` or `";"` is find's terminator, not the shell's separator), the files `find` finds, run or
+    handed to a shell, are refused, and so is `run-parts` (except `--test` and `--list`).
+  - The validation patterns end with `\Z`: `$` also matched before a final line feed, so a package name, a recipe or an
+    argument ending with one passed (grassfield's Store had the same gap; fixed there in the same step).
+  - Tests: `tests/run-in-container.sh`: 58 tests, OK (Rules.test_omarchy, Rules.test_no_line_end_after_a_token,
+    Recipes.test_what_pr_7s_merge_left new; each of the three scan changes reverted alone fails the new test). The three
+    setups of Omarchy 4.0.4 still pass the scan, and their 43 pins match (`find -exec rm -rf -- {} +` in
+    `install/helpers/browser-policy.sh` is read and accepted).
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
