@@ -113,9 +113,15 @@ INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
 NETWORK = re.compile(r"\b(urllib|urlopen|requests|http\.client|httpx|aiohttp|pycurl|socket|ftplib|LWP|HTTP::Tiny|"
                      r"Net::HTTP|open-uri|fetch\s*\()")
 TERMINAL_RUNNERS = {"xdg-terminal-exec"}
-# find's actions that run a command on each file found, up to ";" or "+" (grassfield-packages PR #7's merge). Its ";",
-# escaped or quoted on its own (\; ';' ";"), is a word, not the shell's separator: prepare() writes it FIND_END.
+# find's actions that run a command on each file found, up to ";" or to a "+" right after "{}" (grassfield-packages PR
+# #7's merge, PR #10's review). Its ";", escaped or quoted on its own (\; ';' ";"), is a word, not the shell's separator:
+# prepare() writes it FIND_END.
 FIND_RUNS = {"-exec", "-execdir", "-ok", "-okdir"}
+# What an action handed the files found ("{}") may be, after its wrappers: commands that copy, move, remove, change or
+# read a file, and never run it. Anything else (a shell, an interpreter, busybox, the file itself) is refused: the files
+# find finds are outside the pinned files.
+FIND_HANDS = {"rm", "rmdir", "cp", "mv", "ln", "install", "chmod", "chown", "chgrp", "touch", "stat", "cat", "ls",
+              "readlink", "realpath", "basename", "dirname", "sha256sum", "cmp", "grep", "echo", "printf"}
 FIND_END = "__find_end__"
 LONE_SEMICOLON = re.compile(r"(?<!\S)(?:\\;|';'|\";\")(?!\S)")
 DYNAMIC_OMARCHY = re.compile(r"\bomarchy-[a-z0-9-]*\$")
@@ -937,6 +943,25 @@ def run_time_name(word, literals):
     return literals.get(m.group(1)) if m else None
 
 
+def after_wrapper(words, problems):
+    """The words after the wrapper words[0] and its options (WRAPPERS): the command it runs."""
+    takes, plain = WRAPPERS[os.path.basename(words[0])]
+    words = words[1:]
+    while words:
+        if words[0] == "--":
+            return words[1:]
+        if words[0].startswith("-"):
+            words = words[2:] if words[0] in takes else words[1:]
+        elif ASSIGNMENT.match(words[0]):
+            problems.extend(path_problems(words[0]))  # env PATH=...
+            words = words[1:]
+        elif plain:
+            plain, words = plain - 1, words[1:]
+        else:
+            break
+    return words
+
+
 def read_command(words, literals, problems, notes, depth):
     """The commands one simple command runs: itself after its wrappers, and what it hands on."""
     out = []
@@ -953,21 +978,7 @@ def read_command(words, literals, problems, notes, depth):
         elif base in WRAPPERS:
             if base == "command" and len(words) > 1 and words[1] in ("-v", "-V"):
                 return out  # command -v NAME: is NAME there, nothing run
-            takes, plain = WRAPPERS[base]
-            words = words[1:]
-            while words:
-                if words[0] == "--":
-                    words = words[1:]
-                    break
-                if words[0].startswith("-"):
-                    words = words[2:] if words[0] in takes else words[1:]
-                elif ASSIGNMENT.match(words[0]):
-                    problems.extend(path_problems(words[0]))  # env PATH=...
-                    words = words[1:]
-                elif plain:
-                    plain, words = plain - 1, words[1:]
-                else:
-                    break
+            words = after_wrapper(words, problems)
         else:
             break
     if not words:
@@ -1044,24 +1055,28 @@ def read_command(words, literals, problems, notes, depth):
         elif command:
             out += read_command(command, literals, problems, notes, depth + 1)
     elif base == "find":
-        # find ... -exec CMD ... ; (or +), -execdir, -ok, -okdir: CMD runs on each file found, read as a command; the
-        # files found themselves, run or handed to a shell, are outside the pinned files.
+        # find ... -exec CMD ... ; (or {} +), -execdir, -ok, -okdir: CMD runs on each file found, read as a command. A CMD
+        # handed the files found ({}) is, after its wrappers, one of FIND_HANDS, else refused: the files themselves are
+        # outside the pinned files. A "+" ends the action only right after "{}" (find's own rule).
         i = 0
         while i < len(args):
             if args[i] not in FIND_RUNS:
                 i += 1
                 continue
             j = i + 1
-            while j < len(args) and args[j] not in (FIND_END, "+"):
+            while j < len(args) and not (args[j] == FIND_END or (args[j] == "+" and args[j - 1] == "{}")):
                 j += 1
             run = args[i + 1:j]
-            if run and (run[0] == "{}" or (os.path.basename(run[0]) in SHELLS | INTERPRETERS | {"source", "."} and
-                                          "{}" in run[1:])):
+            handed = run
+            while handed and os.path.basename(handed[0]) in WRAPPERS:
+                handed = after_wrapper(handed, problems)
+            if any("{}" in word for word in run) and (not handed or os.path.basename(handed[0]) not in FIND_HANDS):
                 problems.append(f"find {args[i]} runs the files it finds: they are outside the pinned files")
-            elif run:
-                out += read_command(run, literals, problems, notes, depth + 1)
+            if handed and "{}" not in handed[0]:
+                out += read_command(run, literals, problems, notes, depth + 1)  # what it runs, judged as any command
             i = j + 1
-    elif base == "run-parts" and not {"--test", "--list"} & set(args):
+    elif base == "run-parts" and not (len(args) == 2 and args[0] in ("--list", "--test") and not args[1].startswith("-")):
+        # Only a listing of a folder's files, or what would run: run-parts runs every file of a folder, outside the pins.
         problems.append("run-parts runs every file of a folder: they are outside the pinned files")
     out.append(words)
     return out

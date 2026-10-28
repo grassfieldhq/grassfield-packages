@@ -655,9 +655,22 @@ class Recipes(unittest.TestCase):
             with self.subTest(code):
                 self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
         self.assertIn("run-parts runs every file of a folder: they are outside the pinned files", finds("run-parts /etc/x.d")[3])
-        # Nothing run: copies, a listing, a quoted or escaped semicolon elsewhere.
+        # PR #10's review: a wrapper in front of {}, a "+" that does not follow {}, run-parts with more than a listing.
+        for code in (r"find /x -exec sudo {} \;", r"find /x -exec env {} \;", r"find /x -exec setsid {} \;",
+                     r"find /x -exec nohup {} \;", r"find /x -exec timeout 9 {} \;", r"find /x -exec uwsm-app -- {} \;",
+                     r"find /x -exec busybox sh {} \;", r"find /x -exec sudo -u root sh -c 'x' _ {} \;",
+                     r"""find /x -exec sh -c '"$1"' + {} \;""", r"find /x -execdir sudo env A=1 {} +",
+                     r"find /x -exec python3 -c 'x' {} \;", r"find /x -exec ./{} \;"):
+            with self.subTest(code):
+                self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
+        for code in ("run-parts -a --list /etc/x.d", "run-parts --list --report /etc/x.d", "run-parts --test",
+                     "run-parts --list /etc/x.d /etc/y.d", "run-parts --regex x --list /etc/x.d"):
+            with self.subTest(code):
+                self.assertIn("run-parts runs every file of a folder: they are outside the pinned files", finds(code)[3])
+        # Nothing run: copies, a listing, a quoted or escaped semicolon elsewhere, Omarchy's own find (browser-policy.sh).
         for code in (r"find /x -name '*.desktop' -exec cp {} /y \;", "run-parts --list /etc/x.d", "run-parts --test /etc/x.d",
-                     "echo ';'", r"echo a\;b"):
+                     "echo ';'", r"echo a\;b", 'find "$dir" -mindepth 1 -maxdepth 1 ! -user root -exec rm -rf -- {} +',
+                     r"find /x -exec sudo chmod 644 {} \;", "find /x -type f -exec sha256sum {} +"):
             with self.subTest(code):
                 self.assertEqual(finds(code)[:4], (False, False, [], []))
         # In a recipe: refused.

@@ -237,6 +237,16 @@ Last updated: 2026-10-28
     Recipes.test_what_pr_7s_merge_left new; each of the three scan changes reverted alone fails the new test). The three
     setups of Omarchy 4.0.4 still pass the scan, and their 43 pins match (`find -exec rm -rf -- {} +` in
     `install/helpers/browser-policy.sh` is read and accepted).
+  - The integrator's review of PR #10 (opus, FAIL, one MAJOR): the find rule read only the first word after `-exec`, so a
+    wrapper in front of `{}` (`sudo`, `env`, `setsid`, `nohup`, `timeout 9`, `uwsm-app --`, `busybox sh`), a `+` that does
+    not follow `{}` (`-exec sh -c '"$1"' + {} \;`) and `run-parts -a --list DIR` passed. Now an action handed `{}` must
+    be, after its wrappers, one of FIND_HANDS (commands that copy, move, remove, change or read a file: rm, cp, chmod...),
+    else it is refused; what it runs is still read as a command; `+` ends it only right after `{}`; `run-parts` is
+    accepted only as exactly `--list DIR` or `--test DIR`. Tests: `tests/run-in-container.sh`: 58 tests, OK (each case of
+    the review, and Omarchy's own `find "$dir" ... -exec rm -rf -- {} +`, in Recipes.test_what_pr_7s_merge_left); 6
+    mutants of the rule (the first word only, no unwrapping, `+` anywhere, run-parts' old test, `sh` among FIND_HANDS,
+    what a refused action runs not read) each fail it. The CI check job replayed in a throwaway container: `validate:
+    ok`, the facts (15848 packages, 51 entries, 1604 AppStream components), `check-env: ok`, 43 pins.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
