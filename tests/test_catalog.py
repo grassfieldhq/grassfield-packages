@@ -52,7 +52,7 @@ GOOD = {
     "omarchy": {"tag": "v4.0.4", "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
                 "files": {"bin/omarchy-install-game": "b" * 64, "bin/omarchy-remove-game": "c" * 64,
                           "install/helpers/x.sh": "d" * 64, "bin/omarchy-pkg-aur-add": "e" * 64,
-                          "bin/omarchy-pkg-drop": "f" * 64}},
+                          "bin/omarchy-pkg-drop": "f" * 64, "bin/omarchy-pkg-missing": "0" * 64}},
 }
 
 
@@ -96,7 +96,7 @@ class Rules(unittest.TestCase):
         self.broken(lambda o: o["omarchy"]["files"].pop("bin/omarchy-remove-game"),
                     "bin/omarchy-remove-game is not pinned")
         # An AUR app: the AUR's two commands must be pinned (SD21), and the object is required for it too.
-        for command in ("omarchy-pkg-aur-add", "omarchy-pkg-drop"):
+        for command in ("omarchy-pkg-aur-add", "omarchy-pkg-drop", "omarchy-pkg-missing"):
             with self.subTest(command):
                 self.broken(lambda o, c=command: o["omarchy"]["files"].pop(f"bin/{c}"),
                             f"bin/{command} is not pinned, so the Store could not check it (an AUR app)")
@@ -400,7 +400,8 @@ class Recipes(unittest.TestCase):
         with open(os.path.join(self.omarchy, "install", "helpers", "x.sh"), "w") as f:
             f.write("yay -Syu --noconfirm\n")
         self.script("omarchy-install-commented", "# pacman -Sy is never run here\nomarchy-pkg-add a")
-        self.script("omarchy-pkg-aur-add", 'yay -S --noconfirm --needed "$@"')
+        self.script("omarchy-pkg-aur-add", 'if omarchy-pkg-missing "$@"; then\n  yay -S --noconfirm --needed "$@"\nfi')
+        self.script("omarchy-pkg-missing", 'for pkg in "$@"; do pacman -Q "$pkg" &>/dev/null || exit 0; done\nexit 1')
         self.script("omarchy-pkg-drop", 'sudo pacman -Rns --noconfirm "$@"')
         self.script("omarchy-install-aur", "omarchy-pkg-aur-add aur-only")
         self.script("omarchy-install-aur-var", 'omarchy-pkg-aur-add "$1"')
@@ -768,10 +769,11 @@ class Recipes(unittest.TestCase):
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)
         self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-pkg-aur-add",
-                                        "bin/omarchy-pkg-drop", "bin/omarchy-remove-game"])
+                                        "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing", "bin/omarchy-remove-game"])
         # The AUR's two commands are pinned whether or not the catalog lists an AUR app or a setup (SD21).
         bare = dict(GOOD, apps=[a for a in GOOD["apps"] if a["source"]["kind"] in ("repo", "webapp")])
-        self.assertEqual(sorted(catalog.pin_files(bare, self.omarchy)), ["bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-drop"])
+        self.assertEqual(sorted(catalog.pin_files(bare, self.omarchy)),
+                         ["bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing"])
 
         def found(pins):
             p = catalog.Problems()

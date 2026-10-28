@@ -296,7 +296,9 @@ Last updated: 2026-10-28
     and the Store refuses an AUR operation unless both are pinned and match (SD21). `pin_files`, `pin` and `check-env`
     take them with the setups' recipes (`pinned_recipes`); `check-env` reports a finding as `AUR command <name>: …`.
     The lock is unchanged: both, and `omarchy-pkg-missing`, were already pinned through the setups.
-  - `validate`: a catalog with an `aur` app needs the "omarchy" object and both commands pinned.
+  - `validate`: a catalog with an `aur` app needs the "omarchy" object and both commands pinned, with the
+    `omarchy-pkg-missing` that `omarchy-pkg-aur-add` calls first (`AUR_PINS`; the integrator's note on grassfield #36: the
+    Store requires the same, `requiredPins`).
   - `check-env` on an `aur` app: refused when a repository of Omarchy's stable mirror has the name (yay would install the
     repository's; the Store refuses it too) or when the AUR does not know it; `catalog-facts.sh` asks the AUR's web
     service (RPC v5 info) only when the catalog lists an AUR app, and keeps the name and version of each answer that

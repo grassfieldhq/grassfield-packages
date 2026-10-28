@@ -333,7 +333,7 @@ def webapp_name_problem(name):
 
 def validate_omarchy(obj, p):
     """The "omarchy" object: required when the catalog has a setup, whose install and remove recipes it must pin, or an
-    AUR app, whose two commands (AUR_COMMANDS) it must pin."""
+    AUR app, whose two commands and what they call (AUR_PINS) it must pin."""
     sources = [a["source"] for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) and isinstance(a, dict)
                and isinstance(a.get("source"), dict)]
     setups = [s for s in sources if s.get("kind") == "omarchy-setup"]
@@ -365,9 +365,9 @@ def validate_omarchy(obj, p):
         for recipe in (s.get("install"), s.get("remove")):
             if isinstance(recipe, str) and f"bin/{recipe}" not in files:
                 p.add("omarchy", f"files: bin/{recipe} is not pinned, so the Store could not check it")
-    for command in AUR_COMMANDS if aur else ():
-        if f"bin/{command}" not in files:
-            p.add("omarchy", f"files: bin/{command} is not pinned, so the Store could not check it (an AUR app)")
+    for rel in AUR_PINS if aur else ():
+        if rel not in files:
+            p.add("omarchy", f"files: {rel} is not pinned, so the Store could not check it (an AUR app)")
 
 
 def validate_catalog(obj, p, channel=None, pins=True):
@@ -1380,6 +1380,9 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
 # installed files match. They are scanned and pinned always, whether or not the catalog lists an AUR app: an AUR search
 # result the user opens takes the same path.
 AUR_COMMANDS = ("omarchy-pkg-aur-add", "omarchy-pkg-drop")
+# What the Store requires pinned before an AUR operation (grassfield's requiredPins): the two commands, and the
+# omarchy-pkg-missing that omarchy-pkg-aur-add calls first (in their closure, so pin writes it).
+AUR_PINS = ("bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-missing", "bin/omarchy-pkg-drop")
 
 
 def setup_recipes(obj):
