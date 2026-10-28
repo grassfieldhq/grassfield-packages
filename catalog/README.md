@@ -12,7 +12,7 @@ until the owner decides (CLAUDE.md).
 | `sections/<id>.json` | one section each, with `"order"` (an integer, sorted ascending, dropped by the build); `discover` comes first (at most 8 sections, 12 blocks each) |
 | `apps/<id>.json` | one app each, the file named after its id; the id is the app's AppStream id when it has one, spelled exactly as AppStream spells it (CI checks it) |
 | `icons/<name>.png`, `icons/<name>.json` | an icon for an app with no metadata, and its `{"license", "origin", "review": "needs legal review"}` |
-| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version), and the pins: the SHA-256 of every Omarchy file the setups run or read |
+| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version), and the pins: the SHA-256 of every Omarchy file the setups and the AUR's two commands run or read |
 
 ## Adding an app
 1. Pick its source, in this order when it has several: an Omarchy setup (it configures what Omarchy configures), an Arch or
@@ -25,6 +25,10 @@ until the owner decides (CLAUDE.md).
      `packages` that say it is installed, `changes` (what the recipe does, in plain words, written after reading it) and
      `removes` (the user data its removal deletes, when it deletes any). Recipes that sync pacman's databases or download
      code are refused.
+   - an AUR package: `{"id": "example-app", "source": {"kind": "aur", "package": "example-app"}}`. CI refuses a name a
+     repository of Omarchy's stable mirror has (yay would install the repository's: list it as a `repo` app) and a name
+     the AUR does not know. The Store builds it through Omarchy's `omarchy-pkg-aur-add` in Omarchy's terminal, with its
+     warning every time (ADR-0037 b.2).
    - an app without AppStream metadata (most `[omarchy]` packages, web apps): `name`, `summary`, `developer`, `license`,
      `homepage`, and `desktopId` when the package has several entries.
 3. Put it in a section or a category, then run the checks below.
@@ -54,7 +58,9 @@ CI (`.github/workflows/catalog.yml`) runs all of them, then builds both channels
 its container, verifies them as the Store does, and keeps the result as an artifact for 7 days.
 
 ## A setup, or a new Omarchy release: the pins
-A setup runs Omarchy's own files: its recipe and everything the recipe calls or sources. CI does not try to judge those
+A setup runs Omarchy's own files: its recipe and everything the recipe calls or sources. So does an AUR package, through
+Omarchy's `omarchy-pkg-aur-add` and `omarchy-pkg-drop`: these two are pinned and scanned always, whether or not the catalog
+lists an AUR app, since the Store's AUR search results take the same path (ADR-0037 SD21). CI does not try to judge those
 files by reading them; it refuses any of them whose SHA-256 differs from its pin in `omarchy.lock`, is missing, or is not
 pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bump `tag` and `commit` together):
 1. Gather the facts (above), then run, with an Omarchy checkout at the commit `omarchy.lock` names:
@@ -67,15 +73,15 @@ pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bu
    package manager or a downloader (`firejail "$pm" -Sy`), a file of Omarchy's the release lacks, an Omarchy command the
    release lacks or a script outside the pins (`chrt -f 1 "$OMARCHY_PATH/hidden/run"`, `firejail /tmp/x.sh`), or cannot
    be read as shell. A shell or an interpreter with words after it, handed to a command the scan does not know
-   (`chrt -f 1 bash x.sh`, `firejail python3 -c '...'`), is read as a command it runs. The command `find -exec`, `-execdir`, `-ok` or `-okdir` runs is read
-   as a command; handed the files found (`{}`), it must be, with no wrapper in front, one that only copies, moves,
+   (`chrt -f 1 bash x.sh`, `firejail python3 -c '...'`), is read as a command it runs. The command `find -exec`,
+   `-execdir`, `-ok` or `-okdir` runs is read as a command; handed the files found (`{}`), it must be, with no wrapper in front, one that only copies, moves,
    removes, changes or reads a file (`rm`, `cp`, `chmod`...), and a `+` ends it only right after `{}`; `run-parts` is
    accepted only as `--list DIR` or `--test DIR`. A wrapper's option the scan does not list (`env -a`, `env -S`,
    `flock -c`, `sudo -s`...) is refused wherever it appears. Such a setup is not offered.
 3. Otherwise it writes the pins and lists every new, changed and removed file, and what it could not resolve ("read: …":
    a command named by a variable, a variable or a substitution handed to a command it does not know, one of Omarchy's
-   folders handed to one: `quickshell -p "$OMARCHY_PATH/shell"`, whose files are not pinned). Read each listed file before committing `omarchy.lock`: the pin says nobody changed it, not that it is
-   safe.
+   folders handed to one: `quickshell -p "$OMARCHY_PATH/shell"`, whose files are not pinned). Read each listed file
+   before committing `omarchy.lock`: the pin says nobody changed it, not that it is safe.
 4. `build` publishes the release and the pins in the catalog (`"omarchy": {"tag", "commit", "files"}`, ADR-0037 g): the
-   Store runs a setup only while every pinned file of the installed Omarchy matches, and otherwise says the setup waits for
-   the catalog to catch up with that Omarchy.
+   Store runs a setup, or one of the AUR's two commands, only while every pinned file of the installed Omarchy matches, and
+   otherwise says it waits for the catalog to catch up with that Omarchy.

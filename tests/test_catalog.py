@@ -51,7 +51,8 @@ GOOD = {
     ],
     "omarchy": {"tag": "v4.0.4", "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
                 "files": {"bin/omarchy-install-game": "b" * 64, "bin/omarchy-remove-game": "c" * 64,
-                          "install/helpers/x.sh": "d" * 64}},
+                          "install/helpers/x.sh": "d" * 64, "bin/omarchy-pkg-aur-add": "e" * 64,
+                          "bin/omarchy-pkg-drop": "f" * 64, "bin/omarchy-pkg-missing": "0" * 64}},
 }
 
 
@@ -94,10 +95,18 @@ class Rules(unittest.TestCase):
         self.broken(lambda o: o["omarchy"]["files"].update({"bin/y": "A" * 64}), "is not a relative path with a SHA-256")
         self.broken(lambda o: o["omarchy"]["files"].pop("bin/omarchy-remove-game"),
                     "bin/omarchy-remove-game is not pinned")
-        # Without a setup it may be left out.
+        # An AUR app: the AUR's two commands must be pinned (SD21), and the object is required for it too.
+        for command in ("omarchy-pkg-aur-add", "omarchy-pkg-drop", "omarchy-pkg-missing"):
+            with self.subTest(command):
+                self.broken(lambda o, c=command: o["omarchy"]["files"].pop(f"bin/{c}"),
+                            f"bin/{command} is not pinned, so the Store could not check it (an AUR app)")
         obj = copy.deepcopy(GOOD)
         obj.pop("omarchy")
         obj["apps"] = [a for a in obj["apps"] if a["source"]["kind"] != "omarchy-setup"]
+        self.assertIn("omarchy: missing: the Store checks the installed Omarchy against these pins before it builds from "
+                      "the AUR", problems(obj))
+        # Without a setup or an AUR app it may be left out.
+        obj["apps"] = [a for a in obj["apps"] if a["source"]["kind"] != "aur"]
         self.assertEqual(problems(obj), [])
 
     def test_no_line_end_after_a_token(self):
@@ -275,6 +284,10 @@ class Sources(unittest.TestCase):
         icon = next(a for a in obj["apps"] if a["id"] == "example-mail")["icon"]
         self.assertEqual(list(icons), [icon["sha256"]])
         self.assertEqual(icon["bytes"], len(png(64, 64)))
+        # The names catalog-facts.sh asks the AUR about: the AUR apps' packages only.
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools", "catalog.py")
+        run = subprocess.run([sys.executable, "-I", tool, "aur-packages", "--src", self.src], capture_output=True, text=True)
+        self.assertEqual((run.returncode, run.stdout), (0, "aur-tool\n"), run.stderr)
 
     def test_source_problems(self):
         os.rename(os.path.join(self.src, "apps", "aur-tool.json"), os.path.join(self.src, "apps", "other.json"))
@@ -387,7 +400,9 @@ class Recipes(unittest.TestCase):
         with open(os.path.join(self.omarchy, "install", "helpers", "x.sh"), "w") as f:
             f.write("yay -Syu --noconfirm\n")
         self.script("omarchy-install-commented", "# pacman -Sy is never run here\nomarchy-pkg-add a")
-        self.script("omarchy-pkg-aur-add", 'yay -S --noconfirm --needed "$@"')
+        self.script("omarchy-pkg-aur-add", 'if omarchy-pkg-missing "$@"; then\n  yay -S --noconfirm --needed "$@"\nfi')
+        self.script("omarchy-pkg-missing", 'for pkg in "$@"; do pacman -Q "$pkg" &>/dev/null || exit 0; done\nexit 1')
+        self.script("omarchy-pkg-drop", 'sudo pacman -Rns --noconfirm "$@"')
         self.script("omarchy-install-aur", "omarchy-pkg-aur-add aur-only")
         self.script("omarchy-install-aur-var", 'omarchy-pkg-aur-add "$1"')
         self.script("omarchy-install-repo-via-aur", "omarchy-pkg-aur-add game")
@@ -753,7 +768,12 @@ class Recipes(unittest.TestCase):
 
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)
-        self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-remove-game"])
+        self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-pkg-aur-add",
+                                        "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing", "bin/omarchy-remove-game"])
+        # The AUR's two commands are pinned whether or not the catalog lists an AUR app or a setup (SD21).
+        bare = dict(GOOD, apps=[a for a in GOOD["apps"] if a["source"]["kind"] in ("repo", "webapp")])
+        self.assertEqual(sorted(catalog.pin_files(bare, self.omarchy)),
+                         ["bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing"])
 
         def found(pins):
             p = catalog.Problems()
@@ -769,7 +789,7 @@ class Recipes(unittest.TestCase):
         self.script("omarchy-game-helper", "echo helping")
         self.script("omarchy-install-game", 'case $1 in\none|two)\n  omarchy-pkg-add game\n  omarchy-game-helper\n  ;;\nesac')
         text = found(pins)
-        self.assertIn("omarchy bin/omarchy-game-helper: run or read by a setup, not pinned", text)
+        self.assertIn("omarchy bin/omarchy-game-helper: run or read by a setup or the AUR's commands, not pinned", text)
         self.assertIn("omarchy bin/omarchy-install-game: differs from its pin", text)
         pins = catalog.pin_files(GOOD, self.omarchy)
         # A pinned file gone from the checkout, and one no setup uses any more.
@@ -824,6 +844,14 @@ class Recipes(unittest.TestCase):
         self.assertIn("eval: code made at run time", run.stderr)
         with open(lock) as f:
             self.assertEqual(f.read(), before)
+        # The same in one of the AUR's two commands, which no setup of this catalog calls (SD21).
+        self.script("omarchy-pkg-add", 'sudo pacman -S --noconfirm --needed "$@"')
+        self.script("omarchy-pkg-drop", 'sudo pacman -Rns --noconfirm "$@"\nsudo pacman -Sy')
+        run = pin()
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("recipe omarchy-pkg-drop: omarchy-pkg-drop syncs pacman's databases", run.stderr)
+        with open(lock) as f:
+            self.assertEqual(f.read(), before)
 
     def test_check_env(self):
         facts = tempfile.mkdtemp()
@@ -836,6 +864,8 @@ class Recipes(unittest.TestCase):
                 f.write("paint org.example.Paint desktop-application\ngame org.example.Game desktop-application\n")
             with open(os.path.join(facts, "flathub-ids.txt"), "w") as f:
                 f.write("org.example.Flat\n")
+            with open(os.path.join(facts, "aur-packages.txt"), "w") as f:
+                f.write("# the AUR's web service\naur-tool 1.2-1\n")
             p = catalog.Problems()
             catalog.check_env(GOOD, facts, self.omarchy, p, catalog.pin_files(GOOD, self.omarchy))
             self.assertEqual(p.items, [])
@@ -856,6 +886,31 @@ class Recipes(unittest.TestCase):
             self.assertIn("package missing is on no repository", text)
             self.assertIn("Flathub's AppStream has no app org.example.Gone", text)
             self.assertIn("[core] has no package paint", text)
+            # An AUR app (SD21, SD22): a repository's name is refused (yay would install the repository's), and so is a
+            # name the AUR does not know, or no AUR facts at all.
+            aur = copy.deepcopy(GOOD)
+            aur["apps"].append({"id": "aur-game", "source": {"kind": "aur", "package": "game"}})
+            aur["apps"].append({"id": "aur-gone", "source": {"kind": "aur", "package": "aur-gone"}})
+            p = catalog.Problems()
+            catalog.check_env(aur, facts, self.omarchy, p)
+            text = "\n".join(p.items)
+            self.assertIn("app aur-game: [extra] has game: yay would install the repository's; list it as a repo app", text)
+            self.assertIn("app aur-gone: the AUR has no package aur-gone", text)
+            self.assertNotIn("app aur-tool", text)
+            os.unlink(os.path.join(facts, "aur-packages.txt"))
+            p = catalog.Problems()
+            catalog.check_env(GOOD, facts, self.omarchy, p)
+            self.assertEqual(p.items, ["app aur-tool: no AUR facts (aur-packages.txt) to check it against"])
+            # The AUR's two commands are scanned whatever the catalog lists: one that syncs, or one Omarchy lacks, is
+            # refused.
+            self.script("omarchy-pkg-drop", 'sudo pacman -Rns --noconfirm "$@"\nsudo pacman -Sy')
+            os.unlink(os.path.join(self.omarchy, "bin", "omarchy-pkg-aur-add"))
+            bare = dict(GOOD, apps=[a for a in GOOD["apps"] if a["source"]["kind"] in ("repo", "webapp")])
+            p = catalog.Problems()
+            catalog.check_env(bare, facts, self.omarchy, p)
+            text = "\n".join(p.items)
+            self.assertIn("AUR command omarchy-pkg-drop: omarchy-pkg-drop syncs pacman's databases", text)
+            self.assertIn("AUR command omarchy-pkg-aur-add: omarchy-pkg-aur-add is not in the pinned Omarchy release", text)
         finally:
             shutil.rmtree(facts)
 

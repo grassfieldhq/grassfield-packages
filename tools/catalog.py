@@ -53,7 +53,8 @@ SYMBOL = re.compile(r"^[a-z][a-z0-9-]{0,47}\Z")
 FREEDESKTOP = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
 SHA256 = re.compile(r"^[0-9a-f]{64}\Z")
 # The catalog's "omarchy" object (ADR-0037 g): the release its setups were read against, and the pins the Store checks
-# the installed Omarchy against before it runs a setup (a path relative to Omarchy's folder, no "." or ".." segment).
+# the installed Omarchy against before it runs a setup or one of the AUR's two commands (a path relative to Omarchy's
+# folder, no "." or ".." segment).
 OMARCHY_TAG = re.compile(r"^v[0-9]+(\.[0-9]+){0,3}\Z")
 OMARCHY_COMMIT = re.compile(r"^[0-9a-f]{40}\Z")
 OMARCHY_FILE_PATH = re.compile(r"^(?!.*(^|/)\.{1,2}(/|\Z))[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+){0,7}\Z")
@@ -69,17 +70,17 @@ LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 8
 BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
 # Recipes: what the catalog may name (ADR-0037 a, e.4 and g). The control is the pin: catalog/omarchy.lock records the
-# sha256 of every Omarchy file the catalog's setups run or read, transitively, and check-env refuses any file that differs,
-# is missing or is not pinned, until a person has read it and `catalog.py pin` writes the new pins. A shell cannot be judged
-# by patterns alone, so the scan below is the second line: it runs at pin time (pin refuses to write pins over a finding)
-# and in check-env, to help the person who reads the files. It reads the text as shell and fails closed where it cannot
-# read it: comments dropped, heredoc bodies set apart, every command found after the wrappers that run it (sudo -u x, env,
-# command, exec, timeout, gum ... --, systemd-run...), $(...), `...`, a shell's -c argument and a terminal launcher's
-# command line read as commands too; text it cannot parse, eval, a script read from a pipe or a heredoc, a command made by
-# a substitution, an Omarchy command named at run time, an Omarchy command or a sourced file outside the pinned files, and
-# pacman's options or arguments made at run time are refused, never guessed. A command named by a variable is resolved
-# when the file only ever sets that variable to literal text (pm=pacman); otherwise it is listed for the person reading
-# the files, not refused.
+# sha256 of every Omarchy file the catalog's setups and the AUR's two commands (AUR_COMMANDS) run or read, transitively,
+# and check-env refuses any file that differs, is missing or is not pinned, until a person has read it and `catalog.py
+# pin` writes the new pins. A shell cannot be judged by patterns alone, so the scan below is the second line: it runs at
+# pin time (pin refuses to write pins over a finding) and in check-env, to help the person who reads the files. It reads
+# the text as shell and fails closed where it cannot read it: comments dropped, heredoc bodies set apart, every command
+# found after the wrappers that run it (sudo -u x, env, command, exec, timeout, gum ... --, systemd-run...), $(...),
+# `...`, a shell's -c argument and a terminal launcher's command line read as commands too; text it cannot parse, eval,
+# a script read from a pipe or a heredoc, a command made by a substitution, an Omarchy command named at run time, an
+# Omarchy command or a sourced file outside the pinned files, and pacman's options or arguments made at run time are
+# refused, never guessed. A command named by a variable is resolved when the file only ever sets that variable to
+# literal text (pm=pacman); otherwise it is listed for the person reading the files, not refused.
 # A sync makes the next install a partial upgrade (S12): any short-option cluster with y (-Sy, -Syu, -S -y), --refresh or
 # --sysupgrade or a start of them (--ref, --sysu) on pacman, yay or paru, and a yay or paru with no operation (alone it is
 # -Syu; with a term, an interactive AUR install). pacman -U installs a file from outside the repositories. A download runs
@@ -331,13 +332,19 @@ def webapp_name_problem(name):
 # --- the catalog as the Store reads it (ADR-0037 g) -----------------------------------------------------------------
 
 def validate_omarchy(obj, p):
-    """The "omarchy" object: required when the catalog has a setup, whose install and remove recipes it must pin."""
-    setups = [a["source"] for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) and isinstance(a, dict)
-              and isinstance(a.get("source"), dict) and a["source"].get("kind") == "omarchy-setup"]
+    """The "omarchy" object: required when the catalog has a setup, whose install and remove recipes it must pin, or an
+    AUR app, whose two commands and what they call (AUR_PINS) it must pin."""
+    sources = [a["source"] for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) and isinstance(a, dict)
+               and isinstance(a.get("source"), dict)]
+    setups = [s for s in sources if s.get("kind") == "omarchy-setup"]
+    aur = any(s.get("kind") == "aur" for s in sources)
     o = obj.get("omarchy")
     if o is None:
         if setups:
             p.add("omarchy", "missing: the Store checks the installed Omarchy against these pins before it runs a setup")
+        elif aur:
+            p.add("omarchy", "missing: the Store checks the installed Omarchy against these pins before it builds from "
+                             "the AUR")
         return
     if not isinstance(o, dict):
         p.add("omarchy", "not an object")
@@ -358,6 +365,9 @@ def validate_omarchy(obj, p):
         for recipe in (s.get("install"), s.get("remove")):
             if isinstance(recipe, str) and f"bin/{recipe}" not in files:
                 p.add("omarchy", f"files: bin/{recipe} is not pinned, so the Store could not check it")
+    for rel in AUR_PINS if aur else ():
+        if rel not in files:
+            p.add("omarchy", f"files: {rel} is not pinned, so the Store could not check it (an AUR app)")
 
 
 def validate_catalog(obj, p, channel=None, pins=True):
@@ -731,6 +741,14 @@ def load_sources(src, p):
 
 
 # --- the system the catalog names (CI, in an Arch container with Omarchy's stable configuration) --------------------
+
+def aur_packages(obj):
+    """The package names of the catalog's AUR apps (catalog-facts.sh asks the AUR about them)."""
+    apps = obj.get("apps") if isinstance(obj.get("apps"), list) else []
+    names = {a["source"]["package"] for a in apps if isinstance(a, dict) and isinstance(a.get("source"), dict)
+             and a["source"].get("kind") == "aur" and isinstance(a["source"].get("package"), str)}
+    return sorted(n for n in names if PACKAGE.match(n))
+
 
 def wanted_packages(obj):
     """Every package name a fact is needed for: repo apps and the packages of setups."""
@@ -1357,6 +1375,16 @@ def recipe_problems(omarchy, name, args, repo=None, notes=None):
 
 # --- pins: every Omarchy file the catalog's setups run or read (ADR-0037 g) -----------------------------------------------
 
+# The AUR's two commands (ADR-0037 b.2, SD21): the Store installs and removes an AUR package only through Omarchy's
+# own omarchy-pkg-aur-add and omarchy-pkg-drop, in Omarchy's terminal, and only while the catalog pins them and the
+# installed files match. They are scanned and pinned always, whether or not the catalog lists an AUR app: an AUR search
+# result the user opens takes the same path.
+AUR_COMMANDS = ("omarchy-pkg-aur-add", "omarchy-pkg-drop")
+# What the Store requires pinned before an AUR operation (grassfield's requiredPins): the two commands, and the
+# omarchy-pkg-missing that omarchy-pkg-aur-add calls first (in their closure, so pin writes it).
+AUR_PINS = ("bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-missing", "bin/omarchy-pkg-drop")
+
+
 def setup_recipes(obj):
     """(recipe, args) of every well-formed omarchy-setup of the catalog: its install and its remove recipes."""
     out = []
@@ -1371,10 +1399,17 @@ def setup_recipes(obj):
     return out
 
 
+def pinned_recipes(obj):
+    """(command, args) of everything the pins cover: the setups' recipes, then the AUR's two commands (no case to
+    check)."""
+    return setup_recipes(obj) + [(command, []) for command in AUR_COMMANDS]
+
+
 def pin_files(obj, omarchy):
-    """{path relative to the Omarchy checkout: sha256} of every file the setups' recipes run or read, transitively."""
+    """{path relative to the Omarchy checkout: sha256} of every file the setups' recipes and the AUR's two commands run
+    or read, transitively."""
     files = {}
-    for recipe, _ in setup_recipes(obj):
+    for recipe, _ in pinned_recipes(obj):
         for rel, _ in recipe_closure(omarchy, recipe):
             files[rel] = sha256_of(os.path.join(omarchy, rel))
     return files
@@ -1402,14 +1437,16 @@ def pin_problems(obj, omarchy, pins, p):
     current = pin_files(obj, omarchy)
     for rel, digest in sorted(current.items()):
         if rel not in pins:
-            p.add(f"omarchy {rel}", "run or read by a setup, not pinned: read it, then catalog.py pin")
+            p.add(f"omarchy {rel}", "run or read by a setup or the AUR's commands, not pinned: read it, then "
+                                    "catalog.py pin")
         elif pins[rel] != digest:
             p.add(f"omarchy {rel}", "differs from its pin in omarchy.lock: read the change, then catalog.py pin")
     for rel in sorted(set(pins) - set(current)):
         if not os.path.isfile(os.path.join(omarchy, rel)):
             p.add(f"omarchy {rel}", "pinned but missing from the Omarchy checkout")
         else:
-            p.add(f"omarchy {rel}", "pinned but no longer run or read by any setup: catalog.py pin removes it")
+            p.add(f"omarchy {rel}", "pinned but no longer run or read by any setup or the AUR's commands: "
+                                    "catalog.py pin removes it")
 
 
 def pin(src, omarchy, facts, p):
@@ -1434,7 +1471,7 @@ def pin(src, omarchy, facts, p):
     if facts:
         repo = {line.split()[1] for line in read_lines(os.path.join(facts, "repo-packages.txt"))}
     notes = []
-    for recipe, args in setup_recipes(obj):
+    for recipe, args in pinned_recipes(obj):
         for problem in recipe_problems(omarchy, recipe, args, repo, notes):
             p.add(f"recipe {recipe}", problem)
     if p:
@@ -1475,9 +1512,15 @@ def check_env(obj, facts, omarchy, p, pins=None):
                 appstream.setdefault(name, set()).add(cid)
         flathub_path = os.path.join(facts, "flathub-ids.txt")
         flathub = set(read_lines(flathub_path)) if os.path.exists(flathub_path) else None
+        aur_path = os.path.join(facts, "aur-packages.txt")
+        aur = {line.split()[0] for line in read_lines(aur_path)} if os.path.exists(aur_path) else None
     except (OSError, ValueError) as e:
         p.add(facts, f"facts cannot be read: {e}")
         return
+    # The AUR's two commands, scanned as the setups' recipes are (pin writes their pins after the same scan).
+    for command in AUR_COMMANDS:
+        for problem in recipe_problems(omarchy, command, [], set(repo)):
+            p.add(f"AUR command {command}", problem)
     for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) else []:
         if not isinstance(a, dict) or not isinstance(a.get("id"), str) or not isinstance(a.get("source"), dict):
             continue  # validate reports it
@@ -1508,6 +1551,16 @@ def check_env(obj, facts, omarchy, p, pins=None):
                     p.add(where, f"package {pkg} is on no repository of Omarchy's stable mirror")
             if s.get("packages"):
                 appstream_id_problem(p, where, a, s["packages"][0], appstream)
+        elif kind == "aur":
+            # yay would install a repository's package of that name (the Store refuses it too); the AUR must know it.
+            pkg = s.get("package")
+            if pkg in repo:
+                p.add(where, f"[{', '.join(sorted(repo[pkg]))}] has {pkg}: yay would install the repository's; "
+                             "list it as a repo app")
+            if aur is None:
+                p.add(where, "no AUR facts (aur-packages.txt) to check it against")
+            elif pkg not in aur:
+                p.add(where, f"the AUR has no package {pkg}")
         elif kind == "flatpak":
             if flathub is None:
                 p.add(where, "no Flathub facts (flathub-ids.txt) to check it against")
@@ -1669,7 +1722,7 @@ def verify(directory, keyring_dir, channel, min_serial, p):
 def main(argv):
     ap = argparse.ArgumentParser(prog="catalog.py", description="Grassfield Store catalog (ADR-0037 g)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("validate", "packages", "check-env", "build", "pin"):
+    for name in ("validate", "packages", "aur-packages", "check-env", "build", "pin"):
         s = sub.add_parser(name)
         s.add_argument("--src", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "catalog"))
         if name in ("check-env", "pin"):
@@ -1711,6 +1764,8 @@ def main(argv):
         validate_catalog(obj, p)
         if args.cmd == "packages":
             print("\n".join(wanted_packages(obj)))
+        elif args.cmd == "aur-packages":
+            print("\n".join(aur_packages(obj)))
         elif args.cmd == "check-env":
             check_env(obj, args.facts, args.omarchy, p, read_pins(os.path.join(args.src, "omarchy.lock")))
     for item in p.items:
