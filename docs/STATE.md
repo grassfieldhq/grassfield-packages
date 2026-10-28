@@ -231,7 +231,8 @@ Last updated: 2026-10-28
     command (a lone `\;`, `';'` or `";"` is find's terminator, not the shell's separator), the files `find` finds, run or
     handed to a shell, are refused, and so is `run-parts` (except `--test` and `--list`).
   - The validation patterns end with `\Z`: `$` also matched before a final line feed, so a package name, a recipe or an
-    argument ending with one passed (grassfield's Store had the same gap; fixed there in the same step).
+    argument ending with one passed CI (grassfield's Store already validates the catalog with `\A…\z`; its two package
+    name checks and its operation id check used `^…$` and are fixed in its half of this step).
   - Tests: `tests/run-in-container.sh`: 58 tests, OK (Rules.test_omarchy, Rules.test_no_line_end_after_a_token,
     Recipes.test_what_pr_7s_merge_left new; each of the three scan changes reverted alone fails the new test). The three
     setups of Omarchy 4.0.4 still pass the scan, and their 43 pins match (`find -exec rm -rf -- {} +` in
