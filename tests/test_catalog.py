@@ -49,6 +49,9 @@ GOOD = {
         {"id": "org.example.Flat", "source": {"kind": "flatpak", "remote": "flathub", "app": "org.example.Flat"}},
         {"id": "aur-tool", "source": {"kind": "aur", "package": "aur-tool"}},
     ],
+    "omarchy": {"tag": "v4.0.4", "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+                "files": {"bin/omarchy-install-game": "b" * 64, "bin/omarchy-remove-game": "c" * 64,
+                          "install/helpers/x.sh": "d" * 64}},
 }
 
 
@@ -76,6 +79,40 @@ class Rules(unittest.TestCase):
         self.broken(lambda o: o.update(generated="yesterday"), "generated")
         self.broken(lambda o: o.update(extra=1), "unknown key 'extra'")
         self.assertTrue(any("not the channel it is for" in i for i in problems(GOOD, "beta")))
+
+    def test_omarchy(self):
+        # The release and the pins the Store checks the installed Omarchy against before it runs a setup (ADR-0037 g).
+        self.broken(lambda o: o.pop("omarchy"), "omarchy: missing")
+        self.broken(lambda o: o["omarchy"].update(tag="4.0.4"), "tag not like v4.0.4")
+        self.broken(lambda o: o["omarchy"].update(commit="C668141E9C42B13C80C9CA4EA108E11708C5E8A5"), "commit not 40")
+        self.broken(lambda o: o["omarchy"].update(extra=1), "unknown key 'extra'")
+        self.broken(lambda o: o["omarchy"].update(files={}), "files: an object of 1 to 512 pins")
+        self.broken(lambda o: o["omarchy"].update(files={f"bin/x{i}": "a" * 64 for i in range(513)}), "1 to 512")
+        for bad in ("../x", "bin/../x", "/usr/bin/x", "./bin/x", "bin//x", "bin/x y", "bin/x\n", "a/" * 9 + "x"):
+            with self.subTest(bad):
+                self.broken(lambda o, bad=bad: o["omarchy"]["files"].update({bad: "a" * 64}), "is not a relative path")
+        self.broken(lambda o: o["omarchy"]["files"].update({"bin/y": "A" * 64}), "is not a relative path with a SHA-256")
+        self.broken(lambda o: o["omarchy"]["files"].pop("bin/omarchy-remove-game"),
+                    "bin/omarchy-remove-game is not pinned")
+        # Without a setup it may be left out.
+        obj = copy.deepcopy(GOOD)
+        obj.pop("omarchy")
+        obj["apps"] = [a for a in obj["apps"] if a["source"]["kind"] != "omarchy-setup"]
+        self.assertEqual(problems(obj), [])
+
+    def test_no_line_end_after_a_token(self):
+        # "$" in a pattern also matches before a final line feed: the tokens the Store puts in a command line must not end
+        # with one (ADR-0037 e.5).
+        for change, expect in ((lambda o: o["apps"][0]["source"].update(package="paint\n"), "package"),
+                               (lambda o: o["apps"][2]["source"].update(install="omarchy-install-game\n"), "install does not match"),
+                               (lambda o: o["apps"][2]["source"].update(args=["one\n"]), "args"),
+                               (lambda o: o["apps"][2]["source"].update(packages=["game\n"]), "packages"),
+                               (lambda o: o["apps"][0].update(id="org.example.Paint\n"), "id"),
+                               (lambda o: o["omarchy"].update(commit="c668141e9c42b13c80c9ca4ea108e11708c5e8a5\n"), "commit")):
+            with self.subTest(expect):
+                obj = copy.deepcopy(GOOD)
+                change(obj)
+                self.assertTrue(any(expect in item for item in problems(obj)), problems(obj))
 
     def test_sections(self):
         self.broken(lambda o: o["sections"][0].update(id="Discover"), "id does not match")
@@ -213,6 +250,10 @@ class Sources(unittest.TestCase):
             f.write(png(64, 64))
         self.write("icons/example-mail.json", {"license": "LicenseRef-trademark-of-its-owner",
                                                "origin": "https://example.com/icon.png", "review": "needs legal review"})
+        o = GOOD["omarchy"]
+        with open(os.path.join(self.src, "omarchy.lock"), "w", encoding="utf-8") as f:
+            f.write(f"tag {o['tag']}\ncommit {o['commit']}\n\n" +
+                    "".join(f"file {digest} {rel}\n" for rel, digest in sorted(o["files"].items())))
 
     def tearDown(self):
         shutil.rmtree(self.src)
@@ -230,6 +271,7 @@ class Sources(unittest.TestCase):
     def test_sources_pass_and_icons_resolve(self):
         obj, icons, found = self.load()
         self.assertEqual(found, [])
+        self.assertEqual(obj["omarchy"], GOOD["omarchy"])  # omarchy.lock's release and pins, published for the Store
         icon = next(a for a in obj["apps"] if a["id"] == "example-mail")["icon"]
         self.assertEqual(list(icons), [icon["sha256"]])
         self.assertEqual(icon["bytes"], len(png(64, 64)))
@@ -524,6 +566,25 @@ class Recipes(unittest.TestCase):
         self.script("omarchy-install-directvar", 'h=install\n"$OMARCHY_PATH/$h/run.sh"')
         self.assertIn("runs a file outside the pinned files ($OMARCHY_PATH/$h/run.sh)",
                       "\n".join(rp(self.omarchy, "omarchy-install-directvar", [], repo)))
+        # A wrapper option the scan does not know is refused, whatever follows: env -a takes an argument ("rm"), which the
+        # scan would otherwise read as the command (PR #10's re-review); env -S and flock -c run a command string.
+        self.script("omarchy-install-argv0", 'env -a rm bash "$OMARCHY_PATH/hidden/run.sh"')
+        self.assertIn("bash runs a script outside the pinned files ($OMARCHY_PATH/hidden/run.sh)",
+                      "\n".join(rp(self.omarchy, "omarchy-install-argv0", [], repo)))
+        for code in ('env --block-signal rm bash x.sh', 'env -S "bash x.sh"', 'flock -c "bash x.sh" /tmp/l',
+                     'sudo -s bash x.sh', 'runuser -u u -c "bash x.sh"', 'nice -10 bash x.sh', 'systemd-run -S',
+                     'xargs -e rm bash x.sh', 'uwsm-app --weird -- bash x.sh'):
+            with self.subTest(code):
+                self.assertIn("an option the scan does not know", "\n".join(catalog.command_findings(code, repo)[3]))
+        # Omarchy's own wrapper options read as before (each form found in v4.0.4's files).
+        for code in ("uwsm-app -- true", "env -u BROWSER true", "flock -n 9 true", "flock -w 5 /tmp/l true",
+                     "timeout --kill-after=1s 5 true", "sudo -n true", "sudo -v", "sudo -n -l -l", "sudo -u root true",
+                     "sudo -E true", "xargs -r true", "xargs -a /tmp/f true", "setsid -f true", "setsid --fork true",
+                     'systemd-run --user --collect --quiet --on-active="2s" --timer-property=AccuracySec=100ms true',
+                     'systemd-run --user --quiet --collect --unit="omarchy-x" true', "runuser -u u true", "exec -- true",
+                     "sudo -nl true"):
+            with self.subTest(code):
+                self.assertNotIn("an option the scan does not know", "\n".join(catalog.command_findings(code, repo)[3]))
         self.script("omarchy-install-elsewhere", "bash /tmp/x.sh")
         self.assertIn("bash runs a script outside the pinned files (/tmp/x.sh)",
                       "\n".join(rp(self.omarchy, "omarchy-install-elsewhere", [], repo)))
@@ -597,6 +658,53 @@ class Recipes(unittest.TestCase):
                      'kill "$pid"', 'jq -r "$q"'):
             with self.subTest(code):
                 self.assertFalse(any("is handed" in n for n in notes(code)), notes(code))
+
+    def test_what_pr_7s_merge_left(self):
+        # find's actions that run a command, and run-parts (PR #7's merge comment).
+        def finds(code):
+            return catalog.command_findings(code, {"game"})
+        for code in (r"find /x -name a -exec bash -c 'pacman -Sy' \;", "find /x -execdir pacman -Syu {} ';'",
+                     'find /x -ok pacman -Sy {} ";"', "find /x -okdir pacman -Sy {} +",
+                     r"find /x -exec rm {} \; -exec pacman -Sy \;"):
+            with self.subTest(code):
+                self.assertTrue(finds(code)[0], "the command find runs is read: it syncs")
+        self.assertTrue(finds(r"find /x -exec curl -O {} \;")[1])
+        for code in (r"find /x -exec {} \;", "find /x -type f -exec sh {} +", r"find /x -execdir bash {} \;",
+                     r"find /x -exec source {} \;"):
+            with self.subTest(code):
+                self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
+        self.assertIn("run-parts runs every file of a folder: they are outside the pinned files", finds("run-parts /etc/x.d")[3])
+        # PR #10's review: a wrapper in front of {}, a "+" that does not follow {}, run-parts with more than a listing.
+        for code in (r"find /x -exec sudo {} \;", r"find /x -exec env {} \;", r"find /x -exec setsid {} \;",
+                     r"find /x -exec nohup {} \;", r"find /x -exec timeout 9 {} \;", r"find /x -exec uwsm-app -- {} \;",
+                     r"find /x -exec busybox sh {} \;", r"find /x -exec sudo -u root sh -c 'x' _ {} \;",
+                     r"""find /x -exec sh -c '"$1"' + {} \;""", r"find /x -execdir sudo env A=1 {} +",
+                     r"find /x -exec python3 -c 'x' {} \;", r"find /x -exec ./{} \;"):
+            with self.subTest(code):
+                self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
+        # PR #10's re-review: a wrapper's option that takes an argument, missing from its table, put that argument in the
+        # command's place (env -a rm bash {}: "rm" read as the command). A find action handed {} runs no wrapper at all,
+        # with each of -exec, -execdir, -ok and -okdir.
+        for action in ("-exec", "-execdir", "-ok", "-okdir"):
+            for wrapped in ("env -a rm bash", "env --argv0 rm bash", "xargs -E rm bash", "sudo --prompt rm bash",
+                            "doas -a rm bash", "run0 --description rm bash", "sudo chmod 644", "env rm",
+                            "timeout --kill-after=1s 5 rm"):
+                code = f"find /x {action} {wrapped} {{}} \\;"
+                with self.subTest(code):
+                    self.assertIn("runs the files it finds: they are outside the pinned files", "\n".join(finds(code)[3]))
+        for code in ("run-parts -a --list /etc/x.d", "run-parts --list --report /etc/x.d", "run-parts --test",
+                     "run-parts --list /etc/x.d /etc/y.d", "run-parts --regex x --list /etc/x.d"):
+            with self.subTest(code):
+                self.assertIn("run-parts runs every file of a folder: they are outside the pinned files", finds(code)[3])
+        # Nothing run: copies, a listing, a quoted or escaped semicolon elsewhere, Omarchy's own find (browser-policy.sh).
+        for code in (r"find /x -name '*.desktop' -exec cp {} /y \;", "run-parts --list /etc/x.d", "run-parts --test /etc/x.d",
+                     "echo ';'", r"echo a\;b", 'find "$dir" -mindepth 1 -maxdepth 1 ! -user root -exec rm -rf -- {} +',
+                     r"find /x -exec chmod 644 {} \;", "find /x -type f -exec sha256sum {} +"):
+            with self.subTest(code):
+                self.assertEqual(finds(code)[:4], (False, False, [], []))
+        # In a recipe: refused.
+        self.script("omarchy-install-find", r"find ~/.config -name x -exec pacman -Sy {} \;")
+        self.assertIn("syncs pacman's databases", "\n".join(catalog.recipe_problems(self.omarchy, "omarchy-install-find", [], {"game"})))
 
     def test_pins(self):
         pins = catalog.pin_files(GOOD, self.omarchy)

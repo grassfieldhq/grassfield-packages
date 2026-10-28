@@ -41,21 +41,27 @@ SOURCE_KINDS = ("repo", "aur", "omarchy-setup", "webapp", "flatpak")
 BLOCK_KINDS = ("hero", "cards", "row")
 
 # ADR-0037 e.5 and g.
-SECTION_ID = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
-APP_ID = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
-PACKAGE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]{0,127}$")
-SETUP_INSTALL = re.compile(r"^omarchy-install-[a-z0-9-]+$")
-SETUP_REMOVE = re.compile(r"^omarchy-remove-[a-z0-9-]+$")
-RECIPE_ARG = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
-DESKTOP_ID = re.compile(r"^[A-Za-z0-9._-]{1,250}\.desktop$")
-FLATPAK_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$")
-SYMBOL = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
-FREEDESKTOP = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
-LICENSE = re.compile(r"^[A-Za-z0-9.+()-]+( (AND|OR|WITH) [A-Za-z0-9.+()-]+)*$")
-GENERATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-ICON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-FINGERPRINT = re.compile(r"^[0-9A-F]{40}$")
+SECTION_ID = re.compile(r"^[a-z][a-z0-9-]{0,31}\Z")
+APP_ID = re.compile(r"^[A-Za-z0-9._-]{1,255}\Z")
+PACKAGE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]{0,127}\Z")
+SETUP_INSTALL = re.compile(r"^omarchy-install-[a-z0-9-]+\Z")
+SETUP_REMOVE = re.compile(r"^omarchy-remove-[a-z0-9-]+\Z")
+RECIPE_ARG = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}\Z")
+DESKTOP_ID = re.compile(r"^[A-Za-z0-9._-]{1,250}\.desktop\Z")
+FLATPAK_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}\Z")
+SYMBOL = re.compile(r"^[a-z][a-z0-9-]{0,47}\Z")
+FREEDESKTOP = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
+SHA256 = re.compile(r"^[0-9a-f]{64}\Z")
+# The catalog's "omarchy" object (ADR-0037 g): the release its setups were read against, and the pins the Store checks
+# the installed Omarchy against before it runs a setup (a path relative to Omarchy's folder, no "." or ".." segment).
+OMARCHY_TAG = re.compile(r"^v[0-9]+(\.[0-9]+){0,3}\Z")
+OMARCHY_COMMIT = re.compile(r"^[0-9a-f]{40}\Z")
+OMARCHY_FILE_PATH = re.compile(r"^(?!.*(^|/)\.{1,2}(/|\Z))[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+){0,7}\Z")
+MAX_OMARCHY_FILES = 512
+LICENSE = re.compile(r"^[A-Za-z0-9.+()-]+( (AND|OR|WITH) [A-Za-z0-9.+()-]+)*\Z")
+GENERATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+ICON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\Z")
+FINGERPRINT = re.compile(r"^[0-9A-F]{40}\Z")
 
 # Lengths in code points (ADR-0037 g).
 LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 80, 200, 4000
@@ -107,20 +113,62 @@ INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
 NETWORK = re.compile(r"\b(urllib|urlopen|requests|http\.client|httpx|aiohttp|pycurl|socket|ftplib|LWP|HTTP::Tiny|"
                      r"Net::HTTP|open-uri|fetch\s*\()")
 TERMINAL_RUNNERS = {"xdg-terminal-exec"}
+# find's actions that run a command on each file found, up to ";" or to a "+" right after "{}" (grassfield-packages PR
+# #7's merge, PR #10's review). Its ";", escaped or quoted on its own (\; ';' ";"), is a word, not the shell's separator:
+# prepare() writes it FIND_END.
+FIND_RUNS = {"-exec", "-execdir", "-ok", "-okdir"}
+# What an action handed the files found ("{}") may be, its first word, no wrapper in front: commands that copy, move,
+# remove, change or read a file, and never run it. Anything else (a wrapper, a shell, an interpreter, busybox, the file
+# itself) is refused: the files find finds are outside the pinned files.
+FIND_HANDS = {"rm", "rmdir", "cp", "mv", "ln", "install", "chmod", "chown", "chgrp", "touch", "stat", "cat", "ls",
+              "readlink", "realpath", "basename", "dirname", "sha256sum", "cmp", "grep", "echo", "printf"}
+FIND_END = "__find_end__"
+LONE_SEMICOLON = re.compile(r"(?<!\S)(?:\\;|';'|\";\")(?!\S)")
 DYNAMIC_OMARCHY = re.compile(r"\bomarchy-[a-z0-9-]*\$")
-# Programs that run the command after them: (their options that take an argument, how many plain arguments come first).
+# Programs that run the command after them: (their options that take an argument, their options that take none, how many
+# plain arguments come first). An option on neither list is refused (grassfield-packages PR #10's re-review): one that
+# takes an argument would otherwise put that argument in the command's place, and a few run a command string of their
+# own (env -S, flock -c, runuser -c, sudo -s and -i), which no list holds.
 WRAPPERS = {
-    "sudo": ({"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-D", "-R", "-T", "--user", "--group"}, 0),
-    "doas": ({"-u", "-C"}, 0), "run0": ({"-u", "--user", "-g", "--group", "-D", "--chdir"}, 0), "pkexec": ({"--user"}, 0),
-    "env": ({"-u", "-C", "-S", "--unset", "--chdir"}, 0), "command": (set(), 0), "builtin": (set(), 0),
-    "exec": ({"-a"}, 0), "nohup": (set(), 0), "setsid": (set(), 0), "nice": ({"-n"}, 0), "ionice": ({"-c", "-n"}, 0),
-    "stdbuf": ({"-i", "-o", "-e"}, 0), "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
-    "flock": ({"-w", "-E", "--timeout", "--conflict-exit-code"}, 1), "xargs": ({"-I", "-n", "-P", "-d", "-a", "-L"}, 0),
-    "uwsm-app": (set(), 0), "systemd-run": ({"-u", "--unit", "-p", "--property", "--uid", "--gid", "-E", "--setenv",
-                                            "--description", "--slice", "-M", "--machine", "-H", "--host",
-                                            "--working-directory"}, 0),
-    "runuser": ({"-u", "-g", "-G", "--user", "--group", "--supp-group"}, 0), "chroot": ({"--userspec", "--groups"}, 1),
-    "unshare": (set(), 0), "watch": ({"-n", "--interval", "-d"}, 0),
+    "sudo": ({"-u", "--user", "-g", "--group", "-C", "--close-from", "-h", "--host", "-p", "--prompt", "-U",
+              "--other-user", "-r", "--role", "-t", "--type", "-D", "--chdir", "-R", "--chroot", "-T",
+              "--command-timeout"},
+             {"-A", "--askpass", "-b", "--background", "-B", "--bell", "-E", "--preserve-env", "-H", "--set-home", "-k",
+              "--reset-timestamp", "-K", "--remove-timestamp", "-l", "--list", "-n", "--non-interactive", "-N",
+              "--no-update", "-P", "--preserve-groups", "-S", "--stdin", "-v", "--validate"}, 0),
+    "doas": ({"-u", "-C", "-a"}, {"-n", "-L"}, 0),
+    "run0": ({"-u", "--user", "-g", "--group", "-D", "--chdir", "--description", "--slice", "--unit", "--property",
+              "--nice", "--setenv", "--background", "--machine"}, {"--no-ask-password"}, 0),
+    "pkexec": ({"--user"}, {"--keep-cwd", "--disable-internal-agent"}, 0),
+    "env": ({"-u", "--unset", "-C", "--chdir", "-a", "--argv0"}, {"-i", "--ignore-environment", "-", "-0", "--null",
+                                                                  "-v", "--debug"}, 0),
+    "command": (set(), {"-p"}, 0), "builtin": (set(), set(), 0), "exec": ({"-a"}, {"-c", "-l"}, 0),
+    "nohup": (set(), set(), 0), "setsid": (set(), {"-c", "--ctty", "-f", "--fork", "-w", "--wait"}, 0),
+    "nice": ({"-n", "--adjustment"}, set(), 0), "ionice": ({"-c", "--class", "-n", "--classdata"}, {"-t", "--ignore"}, 0),
+    "stdbuf": ({"-i", "--input", "-o", "--output", "-e", "--error"}, set(), 0),
+    "timeout": ({"-s", "--signal", "-k", "--kill-after"}, {"--foreground", "--preserve-status", "-v", "--verbose"}, 1),
+    "flock": ({"-w", "--wait", "--timeout", "-E", "--conflict-exit-code"},
+              {"-s", "--shared", "-x", "-e", "--exclusive", "-u", "--unlock", "-n", "--nb", "--nonblock", "-o",
+               "--close", "-F", "--no-fork", "--verbose"}, 1),
+    "xargs": ({"-I", "--replace", "-n", "--max-args", "-P", "--max-procs", "-d", "--delimiter", "-a", "--arg-file",
+               "-L", "--max-lines", "-E", "--eof", "-s", "--max-chars", "--process-slot-var"},
+              {"-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p", "--interactive", "-x", "--exit",
+               "-o", "--open-tty"}, 0),
+    "uwsm-app": ({"-s", "-t", "-a", "-u", "-d", "-S"}, {"-T"}, 0),
+    "systemd-run": ({"-u", "--unit", "-p", "--property", "--uid", "--gid", "-E", "--setenv", "--description",
+                     "--slice", "-M", "--machine", "-H", "--host", "--working-directory", "--nice", "--service-type",
+                     "--on-active", "--on-boot", "--on-startup", "--on-unit-active", "--on-unit-inactive",
+                     "--on-calendar", "--timer-property", "--path-property", "--socket-property"},
+                    {"--user", "--system", "--scope", "--wait", "-q", "--quiet", "--collect", "-G", "--no-block",
+                     "--no-ask-password", "-t", "--pty", "-P", "--pipe", "--same-dir", "-d", "-r",
+                     "--remain-after-exit", "--send-sighup"}, 0),
+    "runuser": ({"-u", "-g", "-G", "--user", "--group", "--supp-group", "-w", "--whitelist-environment"},
+                {"-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty"}, 0),
+    "chroot": ({"--userspec", "--groups"}, {"--skip-chdir"}, 1),
+    "unshare": (set(), {"-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net", "-p", "--pid", "-U", "--user",
+                        "-C", "--cgroup", "-T", "--time", "-f", "--fork", "-r", "--map-root-user", "--mount-proc"}, 0),
+    "watch": ({"-n", "--interval"}, {"-t", "--no-title", "-b", "--beep", "-e", "--errexit", "-g", "--chgexit", "-c",
+                                     "--color", "-x", "--exec", "-p", "--precise"}, 0),
 }
 PACKAGE_MANAGERS = {"pacman", "yay", "paru"}
 AUR_HELPERS = {"yay", "paru"}
@@ -265,12 +313,43 @@ def webapp_name_problem(name):
 
 # --- the catalog as the Store reads it (ADR-0037 g) -----------------------------------------------------------------
 
-def validate_catalog(obj, p, channel=None):
-    """The rules of the built file. The Store applies the same ones; CI refuses any break."""
+def validate_omarchy(obj, p):
+    """The "omarchy" object: required when the catalog has a setup, whose install and remove recipes it must pin."""
+    setups = [a["source"] for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) and isinstance(a, dict)
+              and isinstance(a.get("source"), dict) and a["source"].get("kind") == "omarchy-setup"]
+    o = obj.get("omarchy")
+    if o is None:
+        if setups:
+            p.add("omarchy", "missing: the Store checks the installed Omarchy against these pins before it runs a setup")
+        return
+    if not isinstance(o, dict):
+        p.add("omarchy", "not an object")
+        return
+    check_keys(p, "omarchy", o, ("tag", "commit", "files"))
+    if not isinstance(o.get("tag"), str) or not OMARCHY_TAG.match(o["tag"]):
+        p.add("omarchy", "tag not like v4.0.4")
+    if not isinstance(o.get("commit"), str) or not OMARCHY_COMMIT.match(o["commit"]):
+        p.add("omarchy", "commit not 40 lowercase hexadecimal digits")
+    files = o.get("files")
+    if not isinstance(files, dict) or not 1 <= len(files) <= MAX_OMARCHY_FILES:
+        p.add("omarchy", f"files: an object of 1 to {MAX_OMARCHY_FILES} pins")
+        return
+    for path, digest in files.items():
+        if len(path) > 255 or not OMARCHY_FILE_PATH.match(path) or not isinstance(digest, str) or not SHA256.match(digest):
+            p.add("omarchy", f"files: {path[:80]!r} is not a relative path with a SHA-256")
+    for s in setups:
+        for recipe in (s.get("install"), s.get("remove")):
+            if isinstance(recipe, str) and f"bin/{recipe}" not in files:
+                p.add("omarchy", f"files: bin/{recipe} is not pinned, so the Store could not check it")
+
+
+def validate_catalog(obj, p, channel=None, pins=True):
+    """The rules of the built file. The Store applies the same ones; CI refuses any break. pins=False: the "omarchy"
+    object is not checked (catalog.py pin, which writes it)."""
     if not isinstance(obj, dict):
         p.add("catalog", "not a JSON object")
         return
-    check_keys(p, "catalog", obj, ("version", "channel", "serial", "generated", "sections", "categories", "apps"))
+    check_keys(p, "catalog", obj, ("version", "channel", "serial", "generated", "sections", "categories", "apps", "omarchy"))
     if obj.get("version") != 1:
         p.add("version", "not 1")
     if obj.get("channel") not in CHANNELS:
@@ -323,6 +402,9 @@ def validate_catalog(obj, p, channel=None):
             if a["id"] in app_ids:
                 p.add(where, "id appears twice")
             app_ids.add(a["id"])
+
+    if pins:
+        validate_omarchy(obj, p)
 
     sections = obj.get("sections")
     if not isinstance(sections, list) or not 1 <= len(sections) <= 8:
@@ -617,6 +699,17 @@ def load_sources(src, p):
 
     obj = {"version": 1, "channel": "stable", "serial": 1, "generated": "1970-01-01T00:00:01Z",
            "sections": sections, "categories": categories, "apps": apps}
+    lock = os.path.join(src, "omarchy.lock")
+    if os.path.isfile(lock):
+        # The release and the pins, published for the Store (ADR-0037 g): it runs a setup only while every pinned file of
+        # the installed Omarchy matches.
+        try:
+            lines = read_lines(lock)
+            obj["omarchy"] = {"tag": next((l.split()[1] for l in lines if l.startswith("tag ")), None),
+                              "commit": next((l.split()[1] for l in lines if l.startswith("commit ")), None),
+                              "files": dict(sorted(read_pins(lock).items()))}
+        except (OSError, ValueError, IndexError) as e:
+            p.add("omarchy.lock", f"cannot be read: {e}")
     return obj, icon_files
 
 
@@ -778,6 +871,7 @@ def prepare(code, subs, heredoc=False):
     """Shell text made easy to split: comments dropped, unquoted line ends as ';', every $(...), `...`, <(...), >(...) and
     $((...)) replaced by a placeholder word, the code inside added to subs (an arithmetic's own $(...) too). In a heredoc
     body only the substitutions count. ValueError when a quote or a parenthesis never closes."""
+    code = LONE_SEMICOLON.sub(FIND_END, code)
     out, i, n, quote = [], 0, len(code), None
     while i < n:
         ch = code[i]
@@ -880,6 +974,36 @@ def run_time_name(word, literals):
     return literals.get(m.group(1)) if m else None
 
 
+def after_wrapper(words, problems):
+    """The words after the wrapper words[0] and its options (WRAPPERS): the command it runs; None, with the problem, when
+    an option is on neither of its lists (it could take the command's place, or run a command string of its own)."""
+    wrapper = os.path.basename(words[0])
+    takes, flags, plain = WRAPPERS[wrapper]
+    words = words[1:]
+    while words:
+        word = words[0]
+        if word == "--":
+            return words[1:]
+        if word.startswith("-") and word != "-" and "=" in word and word.split("=", 1)[0] in takes:
+            words = words[1:]  # --unit=x
+        elif word in takes:
+            words = words[2:]
+        elif word in flags or (re.fullmatch(r"-[A-Za-z0-9]{2,}", word) and all("-" + c in flags for c in word[1:])):
+            words = words[1:]  # -n, or -nl: flags together
+        elif word.startswith("-"):
+            problems.append(f"{wrapper} {word}: an option the scan does not know (it may take an argument, which would "
+                            "stand for the command, or run a command of its own)")
+            return None
+        elif ASSIGNMENT.match(word):
+            problems.extend(path_problems(words[0]))  # env PATH=...
+            words = words[1:]
+        elif plain:
+            plain, words = plain - 1, words[1:]
+        else:
+            break
+    return words
+
+
 def read_command(words, literals, problems, notes, depth):
     """The commands one simple command runs: itself after its wrappers, and what it hands on."""
     out = []
@@ -896,21 +1020,9 @@ def read_command(words, literals, problems, notes, depth):
         elif base in WRAPPERS:
             if base == "command" and len(words) > 1 and words[1] in ("-v", "-V"):
                 return out  # command -v NAME: is NAME there, nothing run
-            takes, plain = WRAPPERS[base]
-            words = words[1:]
-            while words:
-                if words[0] == "--":
-                    words = words[1:]
-                    break
-                if words[0].startswith("-"):
-                    words = words[2:] if words[0] in takes else words[1:]
-                elif ASSIGNMENT.match(words[0]):
-                    problems.extend(path_problems(words[0]))  # env PATH=...
-                    words = words[1:]
-                elif plain:
-                    plain, words = plain - 1, words[1:]
-                else:
-                    break
+            words = after_wrapper(words, problems)
+            if words is None:
+                return out
         else:
             break
     if not words:
@@ -986,6 +1098,29 @@ def read_command(words, literals, problems, notes, depth):
             out += simple_commands(command[0], problems, notes, depth + 1)  # a terminal launcher's command line
         elif command:
             out += read_command(command, literals, problems, notes, depth + 1)
+    elif base == "find":
+        # find ... -exec CMD ... ; (or {} +), -execdir, -ok, -okdir: CMD runs on each file found, read as a command. A CMD
+        # handed the files found ({}) is, after its wrappers, one of FIND_HANDS, else refused: the files themselves are
+        # outside the pinned files. A "+" ends the action only right after "{}" (find's own rule).
+        i = 0
+        while i < len(args):
+            if args[i] not in FIND_RUNS:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(args) and not (args[j] == FIND_END or (args[j] == "+" and args[j - 1] == "{}")):
+                j += 1
+            run = args[i + 1:j]
+            # Handed the files found, the action runs no wrapper (Omarchy's own find lines use none): its first word is
+            # one of FIND_HANDS, else it is refused.
+            if any("{}" in word for word in run) and os.path.basename(run[0]) not in FIND_HANDS:
+                problems.append(f"find {args[i]} runs the files it finds: they are outside the pinned files")
+            if run and "{}" not in run[0]:
+                out += read_command(run, literals, problems, notes, depth + 1)  # what it runs, judged as any command
+            i = j + 1
+    elif base == "run-parts" and not (len(args) == 2 and args[0] in ("--list", "--test") and not args[1].startswith("-")):
+        # Only a listing of a folder's files, or what would run: run-parts runs every file of a folder, outside the pins.
+        problems.append("run-parts runs every file of a folder: they are outside the pinned files")
     out.append(words)
     return out
 
@@ -1216,7 +1351,8 @@ def pin(src, omarchy, facts, p):
                        f"{commit}: pins are written only for the commit the lock names")
         return []
     obj, _ = load_sources(src, p)
-    validate_catalog(obj, p)
+    obj.pop("omarchy", None)  # what this command writes: the pins as they are now are not a rule here
+    validate_catalog(obj, p, pins=False)
     repo = None
     if facts:
         repo = {line.split()[1] for line in read_lines(os.path.join(facts, "repo-packages.txt"))}

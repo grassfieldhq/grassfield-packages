@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-10-27
+Last updated: 2026-10-28
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -220,6 +220,47 @@ Last updated: 2026-10-27
 - Carried to grassfield's install step (the Store app, step 3; integrator, PR #4): the pins cover the reviewed release in
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
+- 2026-10-28, Grassfield Store step 3b1 (this repository's half; branch `claude/pensive-thompson-fhk5um` restarted from main
+  afe089c after grassfield PR #30's merge; grassfield's half is grassfieldhq/grassfield PR #34, ADR-0037 g amended there):
+  - The catalog publishes the release and the pins (`"omarchy": {"tag", "commit", "files"}`, read from `omarchy.lock`), so
+    the Store can refuse a setup when the installed Omarchy differs from them (the note carried from PR #4 above).
+    `validate_catalog` requires the object when the catalog has a setup, with both of its recipes pinned (`bin/<name>`),
+    a tag like v4.0.4, a 40-digit commit, 1 to 512 relative paths without `.` or `..` segments and their SHA-256;
+    `catalog.py pin` does not check it (it writes the pins).
+  - The scan gap of PR #7's merge (task 31): the command `find -exec`, `-execdir`, `-ok` or `-okdir` runs is read as a
+    command (a lone `\;`, `';'` or `";"` is find's terminator, not the shell's separator), the files `find` finds, run or
+    handed to a shell, are refused, and so is `run-parts` (except `--test` and `--list`).
+  - The validation patterns end with `\Z`: `$` also matched before a final line feed, so a package name, a recipe or an
+    argument ending with one passed CI (grassfield's Store already validates the catalog with `\A…\z`; its two package
+    name checks and its operation id check used `^…$` and are fixed in its half of this step).
+  - Tests: `tests/run-in-container.sh`: 58 tests, OK (Rules.test_omarchy, Rules.test_no_line_end_after_a_token,
+    Recipes.test_what_pr_7s_merge_left new; each of the three scan changes reverted alone fails the new test). The three
+    setups of Omarchy 4.0.4 still pass the scan, and their 43 pins match (`find -exec rm -rf -- {} +` in
+    `install/helpers/browser-policy.sh` is read and accepted).
+  - The integrator's review of PR #10 (opus, FAIL, one MAJOR): the find rule read only the first word after `-exec`, so a
+    wrapper in front of `{}` (`sudo`, `env`, `setsid`, `nohup`, `timeout 9`, `uwsm-app --`, `busybox sh`), a `+` that does
+    not follow `{}` (`-exec sh -c '"$1"' + {} \;`) and `run-parts -a --list DIR` passed. Now an action handed `{}` must
+    be, after its wrappers, one of FIND_HANDS (commands that copy, move, remove, change or read a file: rm, cp, chmod...),
+    else it is refused; what it runs is still read as a command; `+` ends it only right after `{}`; `run-parts` is
+    accepted only as exactly `--list DIR` or `--test DIR`. Tests: `tests/run-in-container.sh`: 58 tests, OK (each case of
+    the review, and Omarchy's own `find "$dir" ... -exec rm -rf -- {} +`, in Recipes.test_what_pr_7s_merge_left); 6
+    mutants of the rule (the first word only, no unwrapping, `+` anywhere, run-parts' old test, `sh` among FIND_HANDS,
+    what a refused action runs not read) each fail it. The CI check job replayed in a throwaway container: `validate:
+    ok`, the facts (15848 packages, 51 entries, 1604 AppStream components), `check-env: ok`, 43 pins.
+  - The integrator's re-review of 91e7c66 (opus, FAIL, one MAJOR in the same class): the wrapper tables missed options
+    that take an argument (`env -a`/`--argv0`, `xargs -E`, `sudo --prompt`, doas's `-a`, run0's `--description`), so
+    the scan read that argument as the command (`-exec env -a rm bash {} \;` passed and ran the file; outside find,
+    `env -a rm bash "$OMARCHY_PATH/hidden/run.sh"` too). Now each wrapper lists its options that take an argument and its
+    flags; any other option is refused ("an option the scan does not know"), which also refuses those that run a command
+    string of their own (`env -S`, `flock -c`, `runuser -c`, `sudo -s`/`-i`); `--opt=value` and grouped flags (`-nl`)
+    are read. A find action handed `{}` runs no wrapper at all: its first word is one of FIND_HANDS. Tests: 58 OK (each
+    case of the re-review with each of -exec, -execdir, -ok and -okdir; the outside-find case; nine unknown options
+    refused; every wrapper form of Omarchy v4.0.4's files still read); 6 mutants of the change (an unknown option
+    skipped, find unwrapping again, env's `-a` unlisted, timeout's `--kill-after` unlisted, no grouped flags, no `=`
+    form) each fail them. The six recipes of the three setups pass the scan against the Omarchy 4.0.4 checkout and the
+    43 pins match (catalog.recipe_problems and pin_problems, facts of 2026-10-27); the full CI replay could not fetch
+    Omarchy's mirror (`extra.files` too slow, three tries), and with the facts of 2026-10-27 check-env reports only the 10
+    catalog apps added since those facts were made.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
