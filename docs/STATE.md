@@ -261,6 +261,31 @@ Last updated: 2026-10-28
     43 pins match (catalog.recipe_problems and pin_problems, facts of 2026-10-27); the full CI replay could not fetch
     Omarchy's mirror (`extra.files` too slow, three tries), and with the facts of 2026-10-27 check-env reports only the 10
     catalog apps added since those facts were made.
+  - Merged: grassfield #34 as d4332ab, this repository's PR #10 as 4adc276 (opus PASS on 9dee19e).
+- 2026-10-28, follow-up of PR #10's merge (branch `claude/pensive-thompson-fhk5um` restarted from main 4adc276): the
+  integrator's merge note (on grassfield #34): outside find, a command the scan does not know, handed a shell and a
+  script, passed with no note (`chrt -f 1 bash "$OMARCHY_PATH/hidden/run.sh"`, `firejail bash …`); it predates PR #10.
+  - A command the scan does not know (`runs_what_it_is_handed`: not one it reads its own way, not Omarchy's, not one that
+    takes names as data) may run what it is handed. A shell or an interpreter there, by its name or a system folder's
+    path, with words after it, is read as a command from that word on (`chrt -f 1 bash x.sh` is judged as `bash x.sh`, a
+    `-c` text is read). Refused among its words: a file of Omarchy's the closure did not pin (one the release lacks), an
+    Omarchy command the release lacks, a word with a script's suffix (`.sh`, `.py`, `.pl`, `.js`, `.lua`...) outside
+    the pins. One of Omarchy's folders is a note ("its files are not pinned"). Its other words (a path in the home folder,
+    a device) are data the scan cannot tell from a program: refusing every path there would refuse Omarchy's own `sed`,
+    `mount` and function calls (the survey below).
+  - Found on the way, the same class: an interpreter's own script was never judged (`python3 /tmp/x.py`, `perl ./x.pl`
+    passed). Its first operand, after the options that take an argument (`-W`, `-X`, `-I`, `-r`), is now judged against
+    the pins like a shell's; `-c`, `-e`, `-m` (alone or grouped, `-uc`) run text or a module, not a file.
+  - `useradd`, `usermod` and `chsh` take a login shell as data (`-s /bin/bash`): with the names taken as data.
+  - Survey of Omarchy v4.0.4 (c668141), all 63 `omarchy-install-*` and `omarchy-remove-*` recipes, the old scan against the
+    new: no new problem, none gone; two new notes, both Omarchy's own Quickshell folder (`qs ipc -p "$OMARCHY_PATH/shell"`
+    in `bin/omarchy-shell`, `systemd-cat … quickshell -p "$OMARCHY_PATH/shell"` in `bin/omarchy-launch-shell`), in the
+    browser setup's closure. Its 183 files are not pinned; they are the running desktop's own shell, which the session
+    runs anyway: a note for the person who pins, not a refusal (the integrator decides).
+  - Tests: `tests/run-in-container.sh --network host`: `Ran 59 tests … OK`, exit 0 (Recipes.test_what_pr_10s_merge_left
+    new: each case of the note, an interpreter's script, a shell function that runs its arguments, the cases read as
+    before, the folder note); 10 mutants of the change each fail it. `validate: ok`; the six recipes of the catalog pass
+    the scan against the Omarchy 4.0.4 checkout and the 43 pins match.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
@@ -313,8 +338,8 @@ Last updated: 2026-10-28
   missing environment unprotected when a job that names it runs, so this comes before `if: false` is removed.
 
 ## Next
-- Software Update: grassfield PR #24 (grassfield-keyring in grassfield-desktop's depends, owner decision O22) and this
-  repository's follow-up PR (branch claude/grassfield-software-update-dj2bvt), then step 2 (the pane) in grassfield when
-  the integrator posts it.
-- Store step 2: the integrator's review of this branch's PR (with grassfield's step 2 PR).
+- The integrator's review of the follow-up of PR #10's merge (this branch's PR); the Quickshell folder note is theirs to
+  weigh (a note, or a refusal of the browser setup).
+- Store step 3b2 (the AUR), then 3c (Flathub) and step 4 (the Updates page), one PR each in grassfield, with this
+  repository's half when the catalog's contract changes (ADR-0037 g).
 - The Store's later steps add to the catalog (icons for apps without metadata after the legal review).
