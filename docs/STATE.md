@@ -221,7 +221,7 @@ Last updated: 2026-10-28
   CI only, so before running a setup the Store refuses it when the installed Omarchy differs from the pinned release, with
   a plain message.
 - 2026-10-28, Grassfield Store step 3b1 (this repository's half; branch `claude/pensive-thompson-fhk5um` restarted from main
-  afe089c after grassfield PR #30's merge; grassfield's half is its PR of the same branch, ADR-0037 g amended there):
+  afe089c after grassfield PR #30's merge; grassfield's half is grassfieldhq/grassfield PR #34, ADR-0037 g amended there):
   - The catalog publishes the release and the pins (`"omarchy": {"tag", "commit", "files"}`, read from `omarchy.lock`), so
     the Store can refuse a setup when the installed Omarchy differs from them (the note carried from PR #4 above).
     `validate_catalog` requires the object when the catalog has a setup, with both of its recipes pinned (`bin/<name>`),
