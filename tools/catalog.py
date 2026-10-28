@@ -41,21 +41,27 @@ SOURCE_KINDS = ("repo", "aur", "omarchy-setup", "webapp", "flatpak")
 BLOCK_KINDS = ("hero", "cards", "row")
 
 # ADR-0037 e.5 and g.
-SECTION_ID = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
-APP_ID = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
-PACKAGE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]{0,127}$")
-SETUP_INSTALL = re.compile(r"^omarchy-install-[a-z0-9-]+$")
-SETUP_REMOVE = re.compile(r"^omarchy-remove-[a-z0-9-]+$")
-RECIPE_ARG = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
-DESKTOP_ID = re.compile(r"^[A-Za-z0-9._-]{1,250}\.desktop$")
-FLATPAK_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}$")
-SYMBOL = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
-FREEDESKTOP = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
-LICENSE = re.compile(r"^[A-Za-z0-9.+()-]+( (AND|OR|WITH) [A-Za-z0-9.+()-]+)*$")
-GENERATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-ICON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-FINGERPRINT = re.compile(r"^[0-9A-F]{40}$")
+SECTION_ID = re.compile(r"^[a-z][a-z0-9-]{0,31}\Z")
+APP_ID = re.compile(r"^[A-Za-z0-9._-]{1,255}\Z")
+PACKAGE = re.compile(r"^[a-z0-9@_+][a-z0-9@._+-]{0,127}\Z")
+SETUP_INSTALL = re.compile(r"^omarchy-install-[a-z0-9-]+\Z")
+SETUP_REMOVE = re.compile(r"^omarchy-remove-[a-z0-9-]+\Z")
+RECIPE_ARG = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}\Z")
+DESKTOP_ID = re.compile(r"^[A-Za-z0-9._-]{1,250}\.desktop\Z")
+FLATPAK_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+){2,}\Z")
+SYMBOL = re.compile(r"^[a-z][a-z0-9-]{0,47}\Z")
+FREEDESKTOP = re.compile(r"^[A-Za-z0-9-]{1,64}\Z")
+SHA256 = re.compile(r"^[0-9a-f]{64}\Z")
+# The catalog's "omarchy" object (ADR-0037 g): the release its setups were read against, and the pins the Store checks
+# the installed Omarchy against before it runs a setup (a path relative to Omarchy's folder, no "." or ".." segment).
+OMARCHY_TAG = re.compile(r"^v[0-9]+(\.[0-9]+){0,3}\Z")
+OMARCHY_COMMIT = re.compile(r"^[0-9a-f]{40}\Z")
+OMARCHY_FILE_PATH = re.compile(r"^(?!.*(^|/)\.{1,2}(/|\Z))[A-Za-z0-9_.+-]+(/[A-Za-z0-9_.+-]+){0,7}\Z")
+MAX_OMARCHY_FILES = 512
+LICENSE = re.compile(r"^[A-Za-z0-9.+()-]+( (AND|OR|WITH) [A-Za-z0-9.+()-]+)*\Z")
+GENERATED = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+ICON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\Z")
+FINGERPRINT = re.compile(r"^[0-9A-F]{40}\Z")
 
 # Lengths in code points (ADR-0037 g).
 LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 80, 200, 4000
@@ -107,6 +113,11 @@ INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
 NETWORK = re.compile(r"\b(urllib|urlopen|requests|http\.client|httpx|aiohttp|pycurl|socket|ftplib|LWP|HTTP::Tiny|"
                      r"Net::HTTP|open-uri|fetch\s*\()")
 TERMINAL_RUNNERS = {"xdg-terminal-exec"}
+# find's actions that run a command on each file found, up to ";" or "+" (grassfield-packages PR #7's merge). Its ";",
+# escaped or quoted on its own (\; ';' ";"), is a word, not the shell's separator: prepare() writes it FIND_END.
+FIND_RUNS = {"-exec", "-execdir", "-ok", "-okdir"}
+FIND_END = "__find_end__"
+LONE_SEMICOLON = re.compile(r"(?<!\S)(?:\\;|';'|\";\")(?!\S)")
 DYNAMIC_OMARCHY = re.compile(r"\bomarchy-[a-z0-9-]*\$")
 # Programs that run the command after them: (their options that take an argument, how many plain arguments come first).
 WRAPPERS = {
@@ -265,12 +276,43 @@ def webapp_name_problem(name):
 
 # --- the catalog as the Store reads it (ADR-0037 g) -----------------------------------------------------------------
 
-def validate_catalog(obj, p, channel=None):
-    """The rules of the built file. The Store applies the same ones; CI refuses any break."""
+def validate_omarchy(obj, p):
+    """The "omarchy" object: required when the catalog has a setup, whose install and remove recipes it must pin."""
+    setups = [a["source"] for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) and isinstance(a, dict)
+              and isinstance(a.get("source"), dict) and a["source"].get("kind") == "omarchy-setup"]
+    o = obj.get("omarchy")
+    if o is None:
+        if setups:
+            p.add("omarchy", "missing: the Store checks the installed Omarchy against these pins before it runs a setup")
+        return
+    if not isinstance(o, dict):
+        p.add("omarchy", "not an object")
+        return
+    check_keys(p, "omarchy", o, ("tag", "commit", "files"))
+    if not isinstance(o.get("tag"), str) or not OMARCHY_TAG.match(o["tag"]):
+        p.add("omarchy", "tag not like v4.0.4")
+    if not isinstance(o.get("commit"), str) or not OMARCHY_COMMIT.match(o["commit"]):
+        p.add("omarchy", "commit not 40 lowercase hexadecimal digits")
+    files = o.get("files")
+    if not isinstance(files, dict) or not 1 <= len(files) <= MAX_OMARCHY_FILES:
+        p.add("omarchy", f"files: an object of 1 to {MAX_OMARCHY_FILES} pins")
+        return
+    for path, digest in files.items():
+        if len(path) > 255 or not OMARCHY_FILE_PATH.match(path) or not isinstance(digest, str) or not SHA256.match(digest):
+            p.add("omarchy", f"files: {path[:80]!r} is not a relative path with a SHA-256")
+    for s in setups:
+        for recipe in (s.get("install"), s.get("remove")):
+            if isinstance(recipe, str) and f"bin/{recipe}" not in files:
+                p.add("omarchy", f"files: bin/{recipe} is not pinned, so the Store could not check it")
+
+
+def validate_catalog(obj, p, channel=None, pins=True):
+    """The rules of the built file. The Store applies the same ones; CI refuses any break. pins=False: the "omarchy"
+    object is not checked (catalog.py pin, which writes it)."""
     if not isinstance(obj, dict):
         p.add("catalog", "not a JSON object")
         return
-    check_keys(p, "catalog", obj, ("version", "channel", "serial", "generated", "sections", "categories", "apps"))
+    check_keys(p, "catalog", obj, ("version", "channel", "serial", "generated", "sections", "categories", "apps", "omarchy"))
     if obj.get("version") != 1:
         p.add("version", "not 1")
     if obj.get("channel") not in CHANNELS:
@@ -323,6 +365,9 @@ def validate_catalog(obj, p, channel=None):
             if a["id"] in app_ids:
                 p.add(where, "id appears twice")
             app_ids.add(a["id"])
+
+    if pins:
+        validate_omarchy(obj, p)
 
     sections = obj.get("sections")
     if not isinstance(sections, list) or not 1 <= len(sections) <= 8:
@@ -617,6 +662,17 @@ def load_sources(src, p):
 
     obj = {"version": 1, "channel": "stable", "serial": 1, "generated": "1970-01-01T00:00:01Z",
            "sections": sections, "categories": categories, "apps": apps}
+    lock = os.path.join(src, "omarchy.lock")
+    if os.path.isfile(lock):
+        # The release and the pins, published for the Store (ADR-0037 g): it runs a setup only while every pinned file of
+        # the installed Omarchy matches.
+        try:
+            lines = read_lines(lock)
+            obj["omarchy"] = {"tag": next((l.split()[1] for l in lines if l.startswith("tag ")), None),
+                              "commit": next((l.split()[1] for l in lines if l.startswith("commit ")), None),
+                              "files": dict(sorted(read_pins(lock).items()))}
+        except (OSError, ValueError, IndexError) as e:
+            p.add("omarchy.lock", f"cannot be read: {e}")
     return obj, icon_files
 
 
@@ -778,6 +834,7 @@ def prepare(code, subs, heredoc=False):
     """Shell text made easy to split: comments dropped, unquoted line ends as ';', every $(...), `...`, <(...), >(...) and
     $((...)) replaced by a placeholder word, the code inside added to subs (an arithmetic's own $(...) too). In a heredoc
     body only the substitutions count. ValueError when a quote or a parenthesis never closes."""
+    code = LONE_SEMICOLON.sub(FIND_END, code)
     out, i, n, quote = [], 0, len(code), None
     while i < n:
         ch = code[i]
@@ -986,6 +1043,26 @@ def read_command(words, literals, problems, notes, depth):
             out += simple_commands(command[0], problems, notes, depth + 1)  # a terminal launcher's command line
         elif command:
             out += read_command(command, literals, problems, notes, depth + 1)
+    elif base == "find":
+        # find ... -exec CMD ... ; (or +), -execdir, -ok, -okdir: CMD runs on each file found, read as a command; the
+        # files found themselves, run or handed to a shell, are outside the pinned files.
+        i = 0
+        while i < len(args):
+            if args[i] not in FIND_RUNS:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(args) and args[j] not in (FIND_END, "+"):
+                j += 1
+            run = args[i + 1:j]
+            if run and (run[0] == "{}" or (os.path.basename(run[0]) in SHELLS | INTERPRETERS | {"source", "."} and
+                                          "{}" in run[1:])):
+                problems.append(f"find {args[i]} runs the files it finds: they are outside the pinned files")
+            elif run:
+                out += read_command(run, literals, problems, notes, depth + 1)
+            i = j + 1
+    elif base == "run-parts" and not {"--test", "--list"} & set(args):
+        problems.append("run-parts runs every file of a folder: they are outside the pinned files")
     out.append(words)
     return out
 
@@ -1216,7 +1293,8 @@ def pin(src, omarchy, facts, p):
                        f"{commit}: pins are written only for the commit the lock names")
         return []
     obj, _ = load_sources(src, p)
-    validate_catalog(obj, p)
+    obj.pop("omarchy", None)  # what this command writes: the pins as they are now are not a rule here
+    validate_catalog(obj, p, pins=False)
     repo = None
     if facts:
         repo = {line.split()[1] for line in read_lines(os.path.join(facts, "repo-packages.txt"))}
