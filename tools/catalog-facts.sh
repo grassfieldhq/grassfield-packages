@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Facts for `catalog.py check-env`, read from the system the catalog names (ADR-0037 g "CI also refuses"): the packages of
 # Omarchy's stable mirror, the application entries of the packages the catalog names, Arch's AppStream ids and, when the
-# catalog lists a Flatpak, Flathub's app ids. Everything read is data.
+# catalog lists a Flatpak, Flathub's app ids, and when it lists an AUR app, the AUR's packages of those names. Everything
+# read is data.
 #
 # Runs ONLY as root inside a throwaway Arch container (it rewrites pacman's configuration and syncs it), e.g.:
 #   docker run --rm -v "$PWD":/src:ro -v <omarchy checkout>:/omarchy:ro -v <out>:/out \
@@ -102,6 +103,28 @@ for _, el in ET.iterparse(sys.stdin.buffer):
         el.clear()
 ' | sort -u
   } >"$out/flathub-ids.txt"
+fi
+
+# The AUR, only when the catalog lists an AUR app: the packages its web service (RPC v5 info) has of those names, as name
+# and version; anything else in its answer is left out.
+mapfile -t aur < <(python3 -I "$tool" aur-packages --src "$src")
+if ((${#aur[@]})); then
+  args=()
+  for name in "${aur[@]}"; do args+=(--data-urlencode "arg[]=$name"); done
+  {
+    echo "# The AUR's web service (aur.archlinux.org/rpc/v5/info): package, version"
+    curl -fsS --max-time 60 --max-filesize 4194304 -G "${args[@]}" https://aur.archlinux.org/rpc/v5/info | python3 -I -c '
+import json, re, sys
+answer = json.load(sys.stdin)
+if not isinstance(answer, dict) or answer.get("type") != "multiinfo" or not isinstance(answer.get("results"), list):
+    sys.exit("catalog-facts.sh: the AUR did not answer with package information")
+for r in answer["results"]:
+    name, version = (r.get("Name"), r.get("Version")) if isinstance(r, dict) else (None, None)
+    if isinstance(name, str) and isinstance(version, str) and re.fullmatch(r"[a-z0-9@_+][a-z0-9@._+-]{0,127}", name) \
+            and re.fullmatch(r"[A-Za-z0-9._+:~-]{1,64}", version):
+        print(name, version)
+' | sort -u
+  } >"$out/aur-packages.txt"
 fi
 
 echo "catalog-facts.sh: $(grep -vc '^#' "$out/repo-packages.txt") packages, $(grep -vc '^#' "$out/app-entries.txt") entries, $(grep -vc '^#' "$out/appstream-ids.txt") AppStream components"

@@ -286,6 +286,29 @@ Last updated: 2026-10-28
     new: each case of the note, an interpreter's script, a shell function that runs its arguments, the cases read as
     before, the folder note); 10 mutants of the change each fail it. `validate: ok`; the six recipes of the catalog pass
     the scan against the Omarchy 4.0.4 checkout and the 43 pins match.
+  - Merged as 22f4101 (opus PASS); two LOW limits recorded by the integrator: a command-string runner (`script -qc`,
+    `su -c`, `tmux new`) handed `bash $OMARCHY_PATH/x` of a missing, suffix-less file; an unknown runner handed a
+    suffix-less path outside Omarchy, data by design.
+- 2026-10-28, Grassfield Store step 3b2, the AUR (this repository's half; branch `claude/pensive-thompson-fhk5um`
+  fast-forwarded to main 22f4101; grassfield's half is its 3b2 PR, ADR-0037 SD21–SD23):
+  - The AUR's two commands, Omarchy's `omarchy-pkg-aur-add` and `omarchy-pkg-drop` (`AUR_COMMANDS`), are pinned and
+    scanned always, whether or not the catalog lists an AUR app: an AUR search result in the Store takes the same path,
+    and the Store refuses an AUR operation unless both are pinned and match (SD21). `pin_files`, `pin` and `check-env`
+    take them with the setups' recipes (`pinned_recipes`); `check-env` reports a finding as `AUR command <name>: …`.
+    The lock is unchanged: both, and `omarchy-pkg-missing`, were already pinned through the setups.
+  - `validate`: a catalog with an `aur` app needs the "omarchy" object and both commands pinned.
+  - `check-env` on an `aur` app: refused when a repository of Omarchy's stable mirror has the name (yay would install the
+    repository's; the Store refuses it too) or when the AUR does not know it; `catalog-facts.sh` asks the AUR's web
+    service (RPC v5 info) only when the catalog lists an AUR app, and keeps the name and version of each answer that
+    reads as a package (`aur-packages.txt`; new command `catalog.py aur-packages`). The catalog lists none today.
+  - catalog/README.md: the AUR source and the pins of its two commands; `omarchy.lock`'s comment.
+  - Tests: `tests/run-in-container.sh --network host`: `Ran 59 tests … OK`, exit 0 (Rules.test_omarchy,
+    Recipes.test_pins, Recipes.test_pin_command, Recipes.test_check_env and Sources.test_sources_pass_and_icons_resolve
+    extended); 9 mutants of the change (each check removed, the commands left out of the pins or of either scan) each
+    fail them. `validate: ok`;
+    `pin` on Omarchy v4.0.4 in a copy of `catalog/`: `nothing changed`, exit 0, the same pins. The facts' AUR step, run
+    alone against the AUR with `yay-bin visual-studio-code-bin gs-surely-not-on-the-aur`: exit 0, the two known names
+    with their versions, the unknown one absent.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
@@ -338,8 +361,7 @@ Last updated: 2026-10-28
   missing environment unprotected when a job that names it runs, so this comes before `if: false` is removed.
 
 ## Next
-- The integrator's review of the follow-up of PR #10's merge (this branch's PR); the Quickshell folder note is theirs to
-  weigh (a note, or a refusal of the browser setup).
-- Store step 3b2 (the AUR), then 3c (Flathub) and step 4 (the Updates page), one PR each in grassfield, with this
-  repository's half when the catalog's contract changes (ADR-0037 g).
+- The integrator's review of step 3b2's half (this branch's PR), with grassfield's 3b2 PR.
+- Store step 3c (Flathub) and step 4 (the Updates page), one PR each in grassfield, with this repository's half when the
+  catalog's contract changes (ADR-0037 g).
 - The Store's later steps add to the catalog (icons for apps without metadata after the legal review).
