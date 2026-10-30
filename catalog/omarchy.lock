@@ -3,8 +3,9 @@
 tag v4.0.4
 commit c668141e9c42b13c80c9ca4ea108e11708c5e8a5
 
-# The pins, the control (ADR-0037 g): the SHA-256 of every Omarchy file the catalog's setups and the AUR's two commands
-# (omarchy-pkg-aur-add, omarchy-pkg-drop: always, SD21) run or read, transitively.
+# The pins, the control (ADR-0037 g): the SHA-256 of every Omarchy file the catalog's setups, the AUR's two commands
+# (omarchy-pkg-aur-add, omarchy-pkg-drop: always, SD21) and Get Flatpak's command (omarchy-pkg-add: always, SD24) run or
+# read, transitively.
 # check-env refuses any such file that differs, is missing or is not pinned. Written only by `tools/catalog.py pin
 # --omarchy <checkout at the commit above> --facts <facts>`, after a person has read each new or changed file it lists
 # (pin refuses to write over a finding of the scan, and prints the commands it could not resolve, to read with care).

@@ -70,9 +70,9 @@ LEN_SECTION_TITLE, LEN_EYEBROW, LEN_TITLE, LEN_TEXT, LEN_DESCRIPTION = 40, 40, 8
 BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
 # Recipes: what the catalog may name (ADR-0037 a, e.4 and g). The control is the pin: catalog/omarchy.lock records the
-# sha256 of every Omarchy file the catalog's setups and the AUR's two commands (AUR_COMMANDS) run or read, transitively,
-# and check-env refuses any file that differs, is missing or is not pinned, until a person has read it and `catalog.py
-# pin` writes the new pins. A shell cannot be judged by patterns alone, so the scan below is the second line: it runs at
+# sha256 of every Omarchy file the catalog's setups, the AUR's two commands (AUR_COMMANDS) and Get Flatpak's command
+# (FLATPAK_COMMAND) run or read, transitively, and check-env refuses any file that differs, is missing or is not pinned,
+# until a person has read it and `catalog.py pin` writes the new pins. A shell cannot be judged by patterns alone, so the scan below is the second line: it runs at
 # pin time (pin refuses to write pins over a finding) and in check-env, to help the person who reads the files. It reads
 # the text as shell and fails closed where it cannot read it: comments dropped, heredoc bodies set apart, every command
 # found after the wrappers that run it (sudo -u x, env, command, exec, timeout, gum ... --, systemd-run...), $(...),
@@ -333,7 +333,8 @@ def webapp_name_problem(name):
 
 def validate_omarchy(obj, p):
     """The "omarchy" object: required when the catalog has a setup, whose install and remove recipes it must pin, or an
-    AUR app, whose two commands and what they call (AUR_PINS) it must pin."""
+    AUR app, whose two commands and what they call (AUR_PINS) it must pin. When present, it always pins Get Flatpak's
+    command (FLATPAK_PINS); without it, the Store does not offer Get Flatpak…."""
     sources = [a["source"] for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) and isinstance(a, dict)
                and isinstance(a.get("source"), dict)]
     setups = [s for s in sources if s.get("kind") == "omarchy-setup"]
@@ -368,6 +369,9 @@ def validate_omarchy(obj, p):
     for rel in AUR_PINS if aur else ():
         if rel not in files:
             p.add("omarchy", f"files: {rel} is not pinned, so the Store could not check it (an AUR app)")
+    for rel in FLATPAK_PINS:
+        if rel not in files:
+            p.add("omarchy", f"files: {rel} is not pinned, so the Store could not check it (Get Flatpak…)")
 
 
 def validate_catalog(obj, p, channel=None, pins=True):
@@ -1383,6 +1387,14 @@ AUR_COMMANDS = ("omarchy-pkg-aur-add", "omarchy-pkg-drop")
 # What the Store requires pinned before an AUR operation (grassfield's requiredPins): the two commands, and the
 # omarchy-pkg-missing that omarchy-pkg-aur-add calls first (in their closure, so pin writes it).
 AUR_PINS = ("bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-missing", "bin/omarchy-pkg-drop")
+# "Get Flatpak…" (ADR-0037 SD24): the Store installs the flatpak package only through Omarchy's own `omarchy-pkg-add
+# flatpak`, in Omarchy's terminal, and only while the catalog pins the command and the installed files match. Scanned and
+# pinned always, as the AUR's two commands are, and Omarchy's stable mirror must have the package.
+FLATPAK_COMMAND = "omarchy-pkg-add"
+FLATPAK_PACKAGE = "flatpak"
+# What the Store requires pinned before it gets Flatpak (grassfield's requiredPins): the command, and the
+# omarchy-pkg-missing it calls first (in its closure, so pin writes it).
+FLATPAK_PINS = ("bin/omarchy-pkg-add", "bin/omarchy-pkg-missing")
 
 
 def setup_recipes(obj):
@@ -1400,14 +1412,14 @@ def setup_recipes(obj):
 
 
 def pinned_recipes(obj):
-    """(command, args) of everything the pins cover: the setups' recipes, then the AUR's two commands (no case to
-    check)."""
-    return setup_recipes(obj) + [(command, []) for command in AUR_COMMANDS]
+    """(command, args) of everything the pins cover: the setups' recipes, then the AUR's two commands and Get Flatpak's
+    command (no case to check)."""
+    return setup_recipes(obj) + [(command, []) for command in AUR_COMMANDS + (FLATPAK_COMMAND,)]
 
 
 def pin_files(obj, omarchy):
-    """{path relative to the Omarchy checkout: sha256} of every file the setups' recipes and the AUR's two commands run
-    or read, transitively."""
+    """{path relative to the Omarchy checkout: sha256} of every file the setups' recipes, the AUR's two commands and Get
+    Flatpak's command run or read, transitively."""
     files = {}
     for recipe, _ in pinned_recipes(obj):
         for rel, _ in recipe_closure(omarchy, recipe):
@@ -1517,10 +1529,15 @@ def check_env(obj, facts, omarchy, p, pins=None):
     except (OSError, ValueError) as e:
         p.add(facts, f"facts cannot be read: {e}")
         return
-    # The AUR's two commands, scanned as the setups' recipes are (pin writes their pins after the same scan).
+    # The AUR's two commands and Get Flatpak's, scanned as the setups' recipes are (pin writes their pins after the same
+    # scan); the package Get Flatpak installs is on Omarchy's stable mirror.
     for command in AUR_COMMANDS:
         for problem in recipe_problems(omarchy, command, [], set(repo)):
             p.add(f"AUR command {command}", problem)
+    for problem in recipe_problems(omarchy, FLATPAK_COMMAND, [], set(repo)):
+        p.add(f"Get Flatpak command {FLATPAK_COMMAND}", problem)
+    if FLATPAK_PACKAGE not in repo:
+        p.add("Get Flatpak", f"Omarchy's stable mirror has no package {FLATPAK_PACKAGE}")
     for a in obj.get("apps", []) if isinstance(obj.get("apps"), list) else []:
         if not isinstance(a, dict) or not isinstance(a.get("id"), str) or not isinstance(a.get("source"), dict):
             continue  # validate reports it

@@ -12,7 +12,7 @@ until the owner decides (CLAUDE.md).
 | `sections/<id>.json` | one section each, with `"order"` (an integer, sorted ascending, dropped by the build); `discover` comes first (at most 8 sections, 12 blocks each) |
 | `apps/<id>.json` | one app each, the file named after its id; the id is the app's AppStream id when it has one, spelled exactly as AppStream spells it (CI checks it) |
 | `icons/<name>.png`, `icons/<name>.json` | an icon for an app with no metadata, and its `{"license", "origin", "review": "needs legal review"}` |
-| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version), and the pins: the SHA-256 of every Omarchy file the setups and the AUR's two commands run or read |
+| `omarchy.lock` | the Omarchy release the recipes and package names are checked against (the owner's version), and the pins: the SHA-256 of every Omarchy file the setups, the AUR's two commands and Get Flatpak's command run or read |
 
 ## Adding an app
 1. Pick its source, in this order when it has several: an Omarchy setup (it configures what Omarchy configures), an Arch or
@@ -60,7 +60,9 @@ its container, verifies them as the Store does, and keeps the result as an artif
 ## A setup, or a new Omarchy release: the pins
 A setup runs Omarchy's own files: its recipe and everything the recipe calls or sources. So does an AUR package, through
 Omarchy's `omarchy-pkg-aur-add` and `omarchy-pkg-drop`: these two are pinned and scanned always, whether or not the catalog
-lists an AUR app, since the Store's AUR search results take the same path (ADR-0037 SD21). CI does not try to judge those
+lists an AUR app, since the Store's AUR search results take the same path (ADR-0037 SD21). So does "Get Flatpak…" in the
+Store's settings, through Omarchy's `omarchy-pkg-add flatpak`: that command is pinned and scanned always too, and CI checks
+that Omarchy's stable mirror has the `flatpak` package (ADR-0037 SD24). CI does not try to judge those
 files by reading them; it refuses any of them whose SHA-256 differs from its pin in `omarchy.lock`, is missing, or is not
 pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bump `tag` and `commit` together):
 1. Gather the facts (above), then run, with an Omarchy checkout at the commit `omarchy.lock` names:
@@ -83,5 +85,5 @@ pinned (ADR-0037 g). So adding a setup, or moving to another Omarchy release (bu
    folders handed to one: `quickshell -p "$OMARCHY_PATH/shell"`, whose files are not pinned). Read each listed file
    before committing `omarchy.lock`: the pin says nobody changed it, not that it is safe.
 4. `build` publishes the release and the pins in the catalog (`"omarchy": {"tag", "commit", "files"}`, ADR-0037 g): the
-   Store runs a setup, or one of the AUR's two commands, only while every pinned file of the installed Omarchy matches, and
+   Store runs a setup, one of the AUR's two commands or Get Flatpak's, only while every pinned file of the installed Omarchy matches, and
    otherwise says it waits for the catalog to catch up with that Omarchy.

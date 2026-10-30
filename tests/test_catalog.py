@@ -52,7 +52,8 @@ GOOD = {
     "omarchy": {"tag": "v4.0.4", "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
                 "files": {"bin/omarchy-install-game": "b" * 64, "bin/omarchy-remove-game": "c" * 64,
                           "install/helpers/x.sh": "d" * 64, "bin/omarchy-pkg-aur-add": "e" * 64,
-                          "bin/omarchy-pkg-drop": "f" * 64, "bin/omarchy-pkg-missing": "0" * 64}},
+                          "bin/omarchy-pkg-drop": "f" * 64, "bin/omarchy-pkg-missing": "0" * 64,
+                          "bin/omarchy-pkg-add": "1" * 64}},
 }
 
 
@@ -100,6 +101,11 @@ class Rules(unittest.TestCase):
             with self.subTest(command):
                 self.broken(lambda o, c=command: o["omarchy"]["files"].pop(f"bin/{c}"),
                             f"bin/{command} is not pinned, so the Store could not check it (an AUR app)")
+        # Get Flatpak's command and what it calls: pinned whenever the object is there (SD24), whatever the apps.
+        for command in ("omarchy-pkg-add", "omarchy-pkg-missing"):
+            with self.subTest(command):
+                self.broken(lambda o, c=command: o["omarchy"]["files"].pop(f"bin/{c}"),
+                            f"bin/{command} is not pinned, so the Store could not check it (Get Flatpak…)")
         obj = copy.deepcopy(GOOD)
         obj.pop("omarchy")
         obj["apps"] = [a for a in obj["apps"] if a["source"]["kind"] != "omarchy-setup"]
@@ -770,10 +776,11 @@ class Recipes(unittest.TestCase):
         pins = catalog.pin_files(GOOD, self.omarchy)
         self.assertEqual(sorted(pins), ["bin/omarchy-install-game", "bin/omarchy-pkg-add", "bin/omarchy-pkg-aur-add",
                                         "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing", "bin/omarchy-remove-game"])
-        # The AUR's two commands are pinned whether or not the catalog lists an AUR app or a setup (SD21).
+        # The AUR's two commands (SD21) and Get Flatpak's (SD24) are pinned whether or not the catalog lists an AUR app or a
+        # setup.
         bare = dict(GOOD, apps=[a for a in GOOD["apps"] if a["source"]["kind"] in ("repo", "webapp")])
         self.assertEqual(sorted(catalog.pin_files(bare, self.omarchy)),
-                         ["bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing"])
+                         ["bin/omarchy-pkg-add", "bin/omarchy-pkg-aur-add", "bin/omarchy-pkg-drop", "bin/omarchy-pkg-missing"])
 
         def found(pins):
             p = catalog.Problems()
@@ -857,7 +864,7 @@ class Recipes(unittest.TestCase):
         facts = tempfile.mkdtemp()
         try:
             with open(os.path.join(facts, "repo-packages.txt"), "w") as f:
-                f.write("extra paint 1-1\nextra game 1-1\n")
+                f.write("extra paint 1-1\nextra game 1-1\nextra flatpak 1:1.18.4-2\n")
             with open(os.path.join(facts, "app-entries.txt"), "w") as f:
                 f.write("paint /usr/share/applications/org.example.Paint.desktop\n")
             with open(os.path.join(facts, "appstream-ids.txt"), "w") as f:
@@ -911,6 +918,15 @@ class Recipes(unittest.TestCase):
             text = "\n".join(p.items)
             self.assertIn("AUR command omarchy-pkg-drop: omarchy-pkg-drop syncs pacman's databases", text)
             self.assertIn("AUR command omarchy-pkg-aur-add: omarchy-pkg-aur-add is not in the pinned Omarchy release", text)
+            # Get Flatpak's command is scanned too, and its package must be on Omarchy's stable mirror (SD24).
+            self.script("omarchy-pkg-add", 'sudo pacman -Syu --noconfirm --needed "$@"')
+            with open(os.path.join(facts, "repo-packages.txt"), "w") as f:
+                f.write("extra paint 1-1\nextra game 1-1\n")
+            p = catalog.Problems()
+            catalog.check_env(bare, facts, self.omarchy, p)
+            text = "\n".join(p.items)
+            self.assertIn("Get Flatpak command omarchy-pkg-add: omarchy-pkg-add syncs pacman's databases", text)
+            self.assertIn("Get Flatpak: Omarchy's stable mirror has no package flatpak", text)
         finally:
             shutil.rmtree(facts)
 

@@ -311,6 +311,22 @@ Last updated: 2026-10-28
     `pin` on Omarchy v4.0.4 in a copy of `catalog/`: `nothing changed`, exit 0, the same pins. The facts' AUR step, run
     alone against the AUR with `yay-bin visual-studio-code-bin gs-surely-not-on-the-aur`: exit 0, the two known names
     with their versions, the unknown one absent.
+- 2026-10-30, Grassfield Store step 3c part 3, "Get Flatpak…" (this repository's half; branch
+  `claude/pensive-thompson-fhk5um` restarted from main b2005ca; grassfield's half is its 3c part 3 PR, ADR-0037 SD24):
+  - Get Flatpak's command, Omarchy's `omarchy-pkg-add` (`FLATPAK_COMMAND`), is pinned and scanned always, as the AUR's two
+    commands are: the Store installs the `flatpak` package only through `omarchy-pkg-add flatpak` in Omarchy's terminal,
+    and only while the catalog pins it and the installed files match. `pinned_recipes` takes it; `check-env` reports a
+    finding as `Get Flatpak command omarchy-pkg-add: …`, and refuses when Omarchy's stable mirror has no `flatpak`
+    package (`FLATPAK_PACKAGE`). The lock's pins are unchanged (`omarchy-pkg-add` and `omarchy-pkg-missing` were pinned
+    through the setups); its comment names the command.
+  - `validate`: an "omarchy" object always pins `bin/omarchy-pkg-add` and the `omarchy-pkg-missing` it calls first
+    (`FLATPAK_PINS`, the Store's `requiredPins`); without the object, the Store does not offer Get Flatpak….
+  - catalog/README.md: Get Flatpak's command among the pins.
+  - Tests: `tests/run-in-container.sh --network host`: `Ran 59 tests … OK`, exit 0 (Rules.test_omarchy, Recipes.test_pins
+    and Recipes.test_check_env extended); 4 mutants of the change (the command left out of the pins, the validation, the
+    scan, the package check) each fail them. `validate: ok`. `check-env` with Omarchy v4.0.4 and the stable mirror's
+    package list: nothing about Get Flatpak (`flatpak` 1:1.18.4-2 in [extra]); the same 10 findings as main from this
+    session's partial copy of the application-entry facts, unrelated.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
@@ -363,7 +379,8 @@ Last updated: 2026-10-28
   missing environment unprotected when a job that names it runs, so this comes before `if: false` is removed.
 
 ## Next
-- The integrator's review of step 3b2's half (this branch's PR), with grassfield's 3b2 PR.
-- Store step 3c (Flathub) and step 4 (the Updates page), one PR each in grassfield, with this repository's half when the
-  catalog's contract changes (ADR-0037 g).
+- The integrator's review of step 3c part 3's half (this branch's PR, Get Flatpak's command pinned), with grassfield's
+  3c part 3 PR.
+- Store step 4 (the Updates page), one PR in grassfield, with this repository's half when the catalog's contract changes
+  (ADR-0037 g).
 - The Store's later steps add to the catalog (icons for apps without metadata after the legal review).
