@@ -350,7 +350,13 @@ Last updated: 2026-10-31
     - `tests/e2e.sh --grassfield <grassfield at b6fdedf>` on the fix: exit 0, 423 PASS, 0 FAIL. The real PKGBUILD was
       built four times on the new package set; build-channel.sh's BUILD-DEPS check passed each time, since it would have
       stopped the build otherwise.
-    - Second run with the two new expectations: see below.
+    - Second run with the two new expectations (2370faa, grassfield at db67a5f's parent b369f16): exit 0, 425 PASS, 0
+      FAIL. The build printed `[omarchy]'s packaging key: 40DFB630FF42BCFFB047046CF0134EE680CAC571` and BUILD-DEPS
+      `qt6-base 6.12.0-3` [extra], `quickshell 0.3.2.r7.g2b4501a-1` [omarchy], `hyprland 0.56.2-4` [extra],
+      `aquamarine 0.15.1-1` [extra], `kcoreaddons 6.31.0-1` [extra].
+    - gitleaks on the branch: no leaks.
+  - Next: the integrator's review (opus: the build's keyring and CI); Omarchy's packaging key is now trusted in the build
+    container by its pinned fingerprint.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
