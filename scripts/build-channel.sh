@@ -92,17 +92,17 @@ install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 # (bin/omarchy-update-keyring, basecamp/omarchy v4.0.6; data, not instructions), fetched from the key server Omarchy
 # names, and used only if the file holds that one key. Over HTTPS (curl follows the proxy settings; gpg's own key fetch
 # does not by default).
-omarchy_key=40DFB630FF42BCFFB047046CF0134EE680CAC571
+omarchy_fpr=40DFB630FF42BCFFB047046CF0134EE680CAC571
 okey=$(mktemp -d)
-curl -fsSL --retry 3 -o "$okey/omarchy.asc" "https://keys.openpgp.org/vks/v1/by-fingerprint/$omarchy_key" >>"$log" 2>&1 ||
-  die "cannot fetch Omarchy's packaging key $omarchy_key from keys.openpgp.org (see $log)"
+curl -fsSL --retry 3 -o "$okey/omarchy.asc" "https://keys.openpgp.org/vks/v1/by-fingerprint/$omarchy_fpr" >>"$log" 2>&1 ||
+  die "cannot fetch Omarchy's packaging key $omarchy_fpr from keys.openpgp.org (see $log)"
 ofprs=$(gpg --homedir "$okey" --batch --no-tty --with-colons --show-keys "$okey/omarchy.asc" 2>>"$log" |
   awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10} {p=0}' || true)
-[[ $ofprs == "$omarchy_key" ]] || die "keys.openpgp.org did not answer with Omarchy's key $omarchy_key alone (got: ${ofprs:-nothing})"
-{ pacman-key --add "$okey/omarchy.asc" && pacman-key --lsign-key "$omarchy_key"; } >>"$log" 2>&1 ||
+[[ $ofprs == "$omarchy_fpr" ]] || die "keys.openpgp.org did not answer with Omarchy's key $omarchy_fpr alone (got: ${ofprs:-nothing})"
+{ pacman-key --add "$okey/omarchy.asc" && pacman-key --lsign-key "$omarchy_fpr"; } >>"$log" 2>&1 ||
   die "cannot trust Omarchy's packaging key (see $log)"
 rm -rf "$okey"
-echo "[omarchy]'s packaging key: $omarchy_key"
+echo "[omarchy] signer trusted, fingerprint $omarchy_fpr"
 pacman -Syu --noconfirm --needed base-devel git diffutils >>"$log" 2>&1 || die "pacman -Syu base-devel git diffutils (see $log)"
 id -u builder >/dev/null 2>&1 || useradd -m builder
 printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman\n' >/etc/sudoers.d/90-builder
