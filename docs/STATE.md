@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-10-28
+Last updated: 2026-10-31
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -327,6 +327,30 @@ Last updated: 2026-10-28
     scan, the package check) each fail them. `validate: ok`. `check-env` with Omarchy v4.0.4 and the stable mirror's
     package list: nothing about Get Flatpak (`flatpak` 1:1.18.4-2 in [extra]); the same 10 findings as main from this
     session's partial copy of the application-entry facts, unrelated.
+
+- 2026-10-31, the build container on Omarchy's own repository too (branch `claude/build-omarchy-repo` from main 33cd831;
+  the owner asked for it while the integrator is away, « Fait les 4 »):
+  - Found while Software Update step 3 was reviewed: `build/pacman.conf` left `[omarchy]` out, so grassfield-desktop's
+    BUILD-DEPS recorded `[extra]`'s quickshell (0.3.2-1). Omarchy users run `[omarchy]`'s (0.3.2.r7.g2b4501a-1, checked
+    on pkgs.omarchy.org on 2026-10-31). The client's compatibility check compares quickshell's whole version (grassfield
+    ADR-0033 s3.4), so a published channel would have refused every update that changes a tracked package. Local builds
+    on the owner's machine were not affected.
+  - `build/pacman.conf`: `[omarchy]` (`https://pkgs.omarchy.org/stable/$arch`) first, as Omarchy 4.0.6's
+    `pacman-stable.conf`. Among what Grassfield builds against, it has only quickshell; none of the 137 packages of
+    `archlinux:base` is in it.
+  - `scripts/build-channel.sh`:
+    - trusts `[omarchy]`'s packaging key as an Omarchy machine does: by the fingerprint Omarchy pins
+      (`omarchy-update-keyring`, 40DFB630FF42BCFFB047046CF0134EE680CAC571), fetched over HTTPS from keys.openpgp.org and
+      used only if the file holds that one key (`pacman-key --add`, `--lsign-key`);
+    - after makepkg, checks that each version grassfield-desktop's BUILD-DEPS records is the one pacman installs from
+      `build/pacman.conf` (`pacman -Sddp`), and prints it with its repository.
+  - `tests/e2e.sh`: two expectations: the key line, and BUILD-DEPS's five lines with quickshell from `[omarchy]`.
+  - README: the build package set.
+  - Tests:
+    - `tests/e2e.sh --grassfield <grassfield at b6fdedf>` on the fix: exit 0, 423 PASS, 0 FAIL. The real PKGBUILD was
+      built four times on the new package set; build-channel.sh's BUILD-DEPS check passed each time, since it would have
+      stopped the build otherwise.
+    - Second run with the two new expectations: see below.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53

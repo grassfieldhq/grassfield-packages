@@ -144,8 +144,13 @@ start=$(date +%s)
 build "$C1"; rc=$?
 expect "build-channel.sh 1.0.0 -> exit 0 ($(( $(date +%s) - start )) s)" test "$rc" == 0
 ((rc == 0)) || { tail -n 40 "$W/build-$C1.log"; exit 1; }
-grep -E '^(commit|channels|stable:|beta:|trust anchor|done)' "$W/build-$C1.log" | sed 's/^/   /'
+grep -E '^(commit|channels|stable:|beta:|trust anchor|\[omarchy\]|BUILD-DEPS|done)' "$W/build-$C1.log" | sed 's/^/   /'
 sed -n '/^ref/,/^package-set:/p' "$W"/tree/build-*.txt | sed 's/^/   /'
+# grassfield ADR-0033 s3.4: the record the compatibility check reads is what an Omarchy stable machine installs, quickshell
+# from Omarchy's own repository.
+expect "[omarchy]'s packaging key trusted by Omarchy's pinned fingerprint" grep -qx "\[omarchy\]'s packaging key: 40DFB630FF42BCFFB047046CF0134EE680CAC571" "$W/build-$C1.log"
+expect "BUILD-DEPS records quickshell from [omarchy], and each of its five versions from build/pacman.conf's first repository" \
+  test "$(grep -c '^BUILD-DEPS: ' "$W/build-$C1.log"):$(grep -cE '^BUILD-DEPS: quickshell [^ ]+, from \[omarchy\]$' "$W/build-$C1.log")" == "5:1"
 expect "the release builds the publisher reads: releases/stable/1.0.0-$REL and releases/beta/1.0.0-$REL" \
   test "$(released stable "1.0.0-$REL"):$(released beta "1.0.0-$REL")" == "1.0.0-$REL:1.0.0-$REL"
 expect "the tree follows the contract (check-tree.sh --trusted: K is in the keyring it ships)" check_tree
