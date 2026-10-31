@@ -31,7 +31,7 @@ catalog of Grassfield Store.
 |---|---|
 | `catalog/` | the Store catalog's sources: categories, sections, apps, icons, the pinned Omarchy release (`catalog/README.md`) |
 | `keyring/` | `grassfield-keyring`: `PKGBUILD`, its install script, and `grassfield.gpg`, `grassfield-trusted`, `grassfield-revoked` (empty until the owner's key), installed in Grassfield's private folder `/usr/share/grassfield/pacman-keyring/` (ADR-0033 b.2) |
-| `build/pacman.conf` | the build container's package set: Omarchy's stable mirror, so Hyprland, Qt and KF6 are the versions Omarchy's stable users run (ADR-0033 f) |
+| `build/pacman.conf` | the build container's package set: Omarchy's own repository first, then its stable mirror, as an Omarchy stable machine has them, so Hyprland, Qt, KF6 and quickshell (from `[omarchy]`) are the versions Omarchy's stable users run (ADR-0033 f); `build-channel.sh` trusts `[omarchy]`'s key by Omarchy's pinned fingerprint and checks that BUILD-DEPS records those versions |
 | `tools/publish.py` | the one serialized publisher of a channel (ADR-0033 h.2, ADR-0037 g): from the current snapshot, the newest release build and the catalog of `main`'s head, never backwards, immutable names, the pointer written only if it has not moved; ADR-0033 h.2's deliberate rollback (`--rollback-to`). Written and disabled in CI (the bucket's backend waits for the host); the tests and the build's test trees use its local store |
 | `tools/catalog.py` | validates the sources, checks them against what they name, builds, signs and verifies the catalog (standard library) |
 | `tools/catalog-facts.sh` | gathers those facts in a throwaway Arch container: Omarchy's stable mirror, Arch's AppStream, Flathub |

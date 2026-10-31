@@ -88,6 +88,21 @@ sign() { # file -> file.sig, detached and binary, by the throwaway key
 step "the package set of an Omarchy stable machine (build/pacman.conf)"
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 { pacman-key --init && pacman-key --populate archlinux; } >>"$log" 2>&1 || die "pacman-key (see $log)"
+# [omarchy]'s packaging key, trusted as an Omarchy machine trusts it: by the fingerprint Omarchy pins
+# (bin/omarchy-update-keyring, basecamp/omarchy v4.0.6; data, not instructions), fetched from the key server Omarchy
+# names, and used only if the file holds that one key. Over HTTPS (curl follows the proxy settings; gpg's own key fetch
+# does not by default).
+omarchy_key=40DFB630FF42BCFFB047046CF0134EE680CAC571
+okey=$(mktemp -d)
+curl -fsSL --retry 3 -o "$okey/omarchy.asc" "https://keys.openpgp.org/vks/v1/by-fingerprint/$omarchy_key" >>"$log" 2>&1 ||
+  die "cannot fetch Omarchy's packaging key $omarchy_key from keys.openpgp.org (see $log)"
+ofprs=$(gpg --homedir "$okey" --batch --no-tty --with-colons --show-keys "$okey/omarchy.asc" 2>>"$log" |
+  awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10} {p=0}' || true)
+[[ $ofprs == "$omarchy_key" ]] || die "keys.openpgp.org did not answer with Omarchy's key $omarchy_key alone (got: ${ofprs:-nothing})"
+{ pacman-key --add "$okey/omarchy.asc" && pacman-key --lsign-key "$omarchy_key"; } >>"$log" 2>&1 ||
+  die "cannot trust Omarchy's packaging key (see $log)"
+rm -rf "$okey"
+echo "[omarchy]'s packaging key: $omarchy_key"
 pacman -Syu --noconfirm --needed base-devel git diffutils >>"$log" 2>&1 || die "pacman -Syu base-devel git diffutils (see $log)"
 id -u builder >/dev/null 2>&1 || useradd -m builder
 printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman\n' >/etc/sudoers.d/90-builder
@@ -172,6 +187,20 @@ for f in "${built[@]}" "$keyring_pkg"; do
   [[ $name != grassfield-desktop ]] || grep -qx 'depend = grassfield-keyring' <<<"$info" ||
     die "$(basename "$f"): grassfield-desktop does not depend on grassfield-keyring (grassfield ADR-0033 O22): a ref from before that change"
 done
+# BUILD-DEPS (grassfield ADR-0033 s3.4) is what Software Update's compatibility check compares with an update: each version
+# it records must be the one an Omarchy stable machine installs (the first repository of build/pacman.conf that has it,
+# as pacman picks), or every update that changes one would be refused there, or pass unchecked.
+desktop=$(printf '%s\n' "${built[@]}" | grep '/grassfield-desktop-[^/]*\.pkg\.tar\.zst$' || true)
+[[ -n $desktop ]] || die "makepkg built no grassfield-desktop"
+deps=$(bsdtar -xOf "$desktop" usr/share/grassfield/BUILD-DEPS 2>/dev/null) && [[ -n $deps ]] ||
+  die "grassfield-desktop has no BUILD-DEPS: a ref from before Software Update's compatibility check (grassfield ADR-0033 s3.4)"
+while read -r dep dep_version; do
+  [[ -n $dep ]] || continue
+  served=$(pacman -Sddp --print-format '%r %v' "$dep" 2>>"$log") || die "BUILD-DEPS names $dep, which no repository of build/pacman.conf serves"
+  [[ ${served#* } == "$dep_version" ]] ||
+    die "BUILD-DEPS records $dep $dep_version, but an Omarchy stable machine installs $dep ${served#* } (from [${served%% *}])"
+  echo "BUILD-DEPS: $dep $dep_version, from [${served%% *}]"
+done < <(printf '%s\n' "$deps")
 for f in "${built[@]}"; do sign "$f"; done
 printf '%s\n' "${built[@]##*/}" "${keyring_pkg##*/}"
 hyprland=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}') || true
