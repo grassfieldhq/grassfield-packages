@@ -1,0 +1,8 @@
+# Findings gitleaks reports that are not secrets, by fingerprint (commit:file:rule:line, as `gitleaks detect -v` prints
+# it). The history is never rewritten, so a false positive already pushed is listed here; a new one is fixed in the file.
+#
+# Omarchy's public package signer fingerprint (40DFB630…C571, pinned in Omarchy's own omarchy-update-keyring) next to the
+# word "key", in the build container's [omarchy] trust (branch claude/build-omarchy-repo); the files now say "fpr".
+ceb842b24834cb4ca85bad0d1303d6e375cfb6bc:scripts/build-channel.sh:generic-api-key:95
+2370faa7ff817e7d47aa619e3a276f6be722cb40:tests/e2e.sh:generic-api-key:151
+84e2cb2d42d24317546f0ecf37d31ec99acd1d4b:docs/STATE.md:generic-api-key:354

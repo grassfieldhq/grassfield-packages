@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-10-28
+Last updated: 2026-10-31
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -327,6 +327,63 @@ Last updated: 2026-10-28
     scan, the package check) each fail them. `validate: ok`. `check-env` with Omarchy v4.0.4 and the stable mirror's
     package list: nothing about Get Flatpak (`flatpak` 1:1.18.4-2 in [extra]); the same 10 findings as main from this
     session's partial copy of the application-entry facts, unrelated.
+
+- 2026-10-31, the build container on Omarchy's own repository too (branch `claude/build-omarchy-repo` from main 33cd831;
+  the owner asked for it while the integrator is away, « Fait les 4 »):
+  - Found while Software Update step 3 was reviewed: `build/pacman.conf` left `[omarchy]` out, so grassfield-desktop's
+    BUILD-DEPS recorded `[extra]`'s quickshell (0.3.2-1). Omarchy users run `[omarchy]`'s (0.3.2.r7.g2b4501a-1, checked
+    on pkgs.omarchy.org on 2026-10-31). The client's compatibility check compares quickshell's whole version (grassfield
+    ADR-0033 s3.4), so a published channel would have refused every update that changes a tracked package. Local builds
+    on the owner's machine were not affected.
+  - `build/pacman.conf`: `[omarchy]` (`https://pkgs.omarchy.org/stable/$arch`) first, as Omarchy 4.0.6's
+    `pacman-stable.conf`. Among what Grassfield builds against, it has only quickshell; none of the 137 packages of
+    `archlinux:base` is in it.
+  - `scripts/build-channel.sh`:
+    - trusts `[omarchy]`'s packaging key as an Omarchy machine does: by the fingerprint Omarchy pins
+      (`omarchy-update-keyring`, 40DFB630FF42BCFFB047046CF0134EE680CAC571), fetched over HTTPS from keys.openpgp.org and
+      used only if the file holds that one key (`pacman-key --add`, `--lsign-key`);
+    - after makepkg, checks that each version grassfield-desktop's BUILD-DEPS records is the one pacman installs from
+      `build/pacman.conf` (`pacman -Sddp`), and prints it with its repository.
+  - `tests/e2e.sh`: two expectations: the key line, and BUILD-DEPS's five lines with quickshell from `[omarchy]`.
+  - README: the build package set.
+  - Tests:
+    - `tests/e2e.sh --grassfield <grassfield at b6fdedf>` on the fix: exit 0, 423 PASS, 0 FAIL. The real PKGBUILD was
+      built four times on the new package set; build-channel.sh's BUILD-DEPS check passed each time, since it would have
+      stopped the build otherwise.
+    - Second run with the two new expectations (2370faa, grassfield at db67a5f's parent b369f16): exit 0, 425 PASS, 0
+      FAIL. The build printed the line naming Omarchy's signer by its pinned fingerprint (now worded `[omarchy] signer
+      trusted, fingerprint …`, see the gitleaks note below) and BUILD-DEPS
+      `qt6-base 6.12.0-3` [extra], `quickshell 0.3.2.r7.g2b4501a-1` [omarchy], `hyprland 0.56.2-4` [extra],
+      `aquamarine 0.15.1-1` [extra], `kcoreaddons 6.31.0-1` [extra].
+    - gitleaks on the branch: three `generic-api-key` findings, all Omarchy's public signer fingerprint next to the word
+      "key" (scripts/build-channel.sh, tests/e2e.sh, this file). They are not secrets: the fingerprint is public, pinned in
+      Omarchy's own `omarchy-update-keyring`. Already pushed, so they are listed in a new `.gitleaksignore` (history is
+      never rewritten), and the files now say "fpr"/"signer"; gitleaks then: no leaks.
+  - The integrator's review of 4ea067a (opus, security and supply-chain): FAIL on one gap; provenance, the key check and the
+    gitleaks entries hold. Answered in the next commit:
+    - MAJOR: tests/smoke.sh (CI's test job) never trusted [omarchy]'s signer, so quickshell from [omarchy] would have been
+      refused. One helper, scripts/omarchy-trust.sh, now does the pinned-fingerprint step for build-channel.sh and
+      smoke.sh alike; smoke.sh also checks that quickshell came from [omarchy].
+    - Minor: [omarchy] first also wins a virtual dependency it provides. qt6-webengine's ttf-font would have been
+      [omarchy]'s 152 MB maplemono-nf-cn: the build installs ttf-dejavu from [extra] first. Mesa answers opengl-driver
+      because every depends array names it first. The build prints which packages came from [omarchy], and the e2e
+      expects quickshell alone.
+    - Minor: the lsign trusts Omarchy's signer for [core] and [extra] too, since pacman has one keyring for every
+      repository: a SigLevel can be set per repository, but there is no per-repository keyring. That is the same as an Omarchy machine, in a container thrown away after
+      one build or test. It is said in the helper.
+    - Nits: a secret key in the answer is refused too (only one primary key, public); `pacman -Sddp` reads /dev/null, not
+      the loop's input; the helper removes its temporary folder on every path.
+    - Information, from grassfield ADR-0033 s3.4: builds from this set record quickshell 0.3.2.r7.g2b4501a-1 and qt6-base
+      6.12.0-3. A machine still ordered like Omarchy 4.0.4, with [omarchy] last (quickshell 0.3.1-1, qt6-base 6.11.2-3),
+      has those updates refused by Software Update until Omarchy 4.0.6's migration 1791403252 puts [omarchy] first and
+      its next update aligns it. This is expected. The owner's local builds are not affected.
+  - The integrator's delta re-review of aec4294: PASS; before the merge, the e2e on aec4294. Run here with grassfield
+    main 0f5ad09: exit 0, its summary "47 checks, 0 failure(s)" (426 PASS lines with check-tree's own, 0 FAIL). Among them
+    "[omarchy]'s signer trusted by Omarchy's pinned fingerprint", "only quickshell came from [omarchy]" and the BUILD-DEPS
+    expectation. The earlier "423" and "425" were the same kind of PASS-line count. CI's two jobs, replayed in containers
+    on aec4294: the build rc 0 (check-tree all PASS), and smoke.sh 7 checks, 0 failures, quickshell
+    0.3.2.r7.g2b4501a-1 from [omarchy].
+  - Next: the integrator's merge.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53

@@ -88,7 +88,15 @@ sign() { # file -> file.sig, detached and binary, by the throwaway key
 step "the package set of an Omarchy stable machine (build/pacman.conf)"
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 { pacman-key --init && pacman-key --populate archlinux; } >>"$log" 2>&1 || die "pacman-key (see $log)"
-pacman -Syu --noconfirm --needed base-devel git diffutils >>"$log" 2>&1 || die "pacman -Syu base-devel git diffutils (see $log)"
+# [omarchy]'s signer, trusted as an Omarchy machine trusts it, by the fingerprint Omarchy pins: scripts/omarchy-trust.sh,
+# the step tests/smoke.sh takes too. It prints the line naming the fingerprint.
+"$here/scripts/omarchy-trust.sh" 2>>"$log" || die "cannot trust [omarchy]'s signer (see $log)"
+# [omarchy] comes first, so it also wins a virtual dependency it can provide (pacman takes the first provider in repository
+# order under --noconfirm): qt6-webengine's ttf-font would be [omarchy]'s 152 MB maplemono-nf-cn. A font of [extra] is
+# installed first; mesa is opengl-driver's provider because every depends array names it first. Which packages came from
+# [omarchy] is printed after makepkg.
+pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu >>"$log" 2>&1 ||
+  die "pacman -Syu base-devel git diffutils ttf-dejavu (see $log)"
 id -u builder >/dev/null 2>&1 || useradd -m builder
 printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman\n' >/etc/sudoers.d/90-builder
 chmod 440 /etc/sudoers.d/90-builder
@@ -172,6 +180,22 @@ for f in "${built[@]}" "$keyring_pkg"; do
   [[ $name != grassfield-desktop ]] || grep -qx 'depend = grassfield-keyring' <<<"$info" ||
     die "$(basename "$f"): grassfield-desktop does not depend on grassfield-keyring (grassfield ADR-0033 O22): a ref from before that change"
 done
+# BUILD-DEPS (grassfield ADR-0033 s3.4) is what Software Update's compatibility check compares with an update: each version
+# it records must be the one an Omarchy stable machine installs (the first repository of build/pacman.conf that has it,
+# as pacman picks), or every update that changes one would be refused there, or pass unchecked.
+desktop=$(printf '%s\n' "${built[@]}" | grep '/grassfield-desktop-[^/]*\.pkg\.tar\.zst$' || true)
+[[ -n $desktop ]] || die "makepkg built no grassfield-desktop"
+deps=$(bsdtar -xOf "$desktop" usr/share/grassfield/BUILD-DEPS 2>/dev/null) && [[ -n $deps ]] ||
+  die "grassfield-desktop has no BUILD-DEPS: a ref from before Software Update's compatibility check (grassfield ADR-0033 s3.4)"
+while read -r dep dep_version; do
+  [[ -n $dep ]] || continue
+  served=$(pacman -Sddp --print-format '%r %v' "$dep" </dev/null 2>>"$log") || die "BUILD-DEPS names $dep, which no repository of build/pacman.conf serves"
+  [[ ${served#* } == "$dep_version" ]] ||
+    die "BUILD-DEPS records $dep $dep_version, but an Omarchy stable machine installs $dep ${served#* } (from [${served%% *}])"
+  echo "BUILD-DEPS: $dep $dep_version, from [${served%% *}]"
+done < <(printf '%s\n' "$deps")
+from_omarchy=$(comm -12 <(pacman -Qq | sort) <(pacman -Sl omarchy 2>/dev/null | awk '{ print $2 }' | sort) | tr '\n' ' ')
+echo "installed from [omarchy]: ${from_omarchy:-none}"
 for f in "${built[@]}"; do sign "$f"; done
 printf '%s\n' "${built[@]##*/}" "${keyring_pkg##*/}"
 hyprland=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}') || true

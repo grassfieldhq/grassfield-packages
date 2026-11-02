@@ -28,7 +28,10 @@ expect() { local d=$1; shift; checks=$((checks + 1)); if "$@"; then echo "PASS: 
 log=/tmp/smoke.log
 
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
-{ pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm --needed python sudo; } >>"$log" 2>&1 ||
+# [omarchy] comes first (an Omarchy stable machine): its signer is trusted the way the build trusts it, by Omarchy's pinned
+# fingerprint (scripts/omarchy-trust.sh; the integrator's review of 4ea067a), or quickshell from it would be refused.
+{ pacman-key --init && pacman-key --populate archlinux && "$here/scripts/omarchy-trust.sh" &&
+  pacman -Syu --noconfirm --needed python sudo; } >>"$log" 2>&1 ||
   { echo "FAIL: the Omarchy stable machine (see $log)"; exit 1; }
 expect "the tree follows the contract (check-tree.sh)" "$here/scripts/check-tree.sh" --tree "$tree" --keyring "$keyring"
 fpr=$(gpg --homedir "$(mktemp -d)" --batch --with-colons --show-keys "$keyring" 2>/dev/null | awk -F: '$1=="fpr" { print $10; exit }')
@@ -44,6 +47,8 @@ reason=$(pacman -Qi grassfield-keyring 2>/dev/null | sed -n 's/^Install Reason *
 expect "pacman -S grassfield-desktop, -compositor and -icons from the $channel channel (signatures required); grassfield-keyring: ${reason:-not installed}" \
   bash -c "pacman -Q grassfield-desktop grassfield-compositor grassfield-icons >/dev/null && [[ '$reason' == 'Installed as a dependency for another package' ]]"
 pacman -Q grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring 2>/dev/null | sed 's/^/   /'
+expect "quickshell installed from [omarchy] (trusted by its pinned fingerprint): $(pacman -Q quickshell 2>/dev/null)" \
+  bash -c 'pacman -Sl omarchy 2>/dev/null | awk '"'"'$2 == "quickshell" { print $3 }'"'"' | grep -qx -- "$(pacman -Q quickshell | cut -d" " -f2)"'
 useradd -m smoke
 state=$(runuser -u smoke -- env HOME=/home/smoke /usr/lib/grassfield/grassfield-update-check |
   python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d["state"], d["channel"])')
