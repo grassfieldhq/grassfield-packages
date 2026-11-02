@@ -377,7 +377,13 @@ Last updated: 2026-10-31
       6.12.0-3. A machine still ordered like Omarchy 4.0.4, with [omarchy] last (quickshell 0.3.1-1, qt6-base 6.11.2-3),
       has those updates refused by Software Update until Omarchy 4.0.6's migration 1791403252 puts [omarchy] first and
       its next update aligns it. This is expected. The owner's local builds are not affected.
-  - Next: the integrator's delta re-review.
+  - The integrator's delta re-review of aec4294: PASS; before the merge, the e2e on aec4294. Run here with grassfield
+    main 0f5ad09: exit 0, its summary "47 checks, 0 failure(s)" (426 PASS lines with check-tree's own, 0 FAIL). Among them
+    "[omarchy]'s signer trusted by Omarchy's pinned fingerprint", "only quickshell came from [omarchy]" and the BUILD-DEPS
+    expectation. The earlier "423" and "425" were the same kind of PASS-line count. CI's two jobs, replayed in containers
+    on aec4294: the build rc 0 (check-tree all PASS), and smoke.sh 7 checks, 0 failures, quickshell
+    0.3.2.r7.g2b4501a-1 from [omarchy].
+  - Next: the integrator's merge.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
