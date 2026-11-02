@@ -88,22 +88,15 @@ sign() { # file -> file.sig, detached and binary, by the throwaway key
 step "the package set of an Omarchy stable machine (build/pacman.conf)"
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 { pacman-key --init && pacman-key --populate archlinux; } >>"$log" 2>&1 || die "pacman-key (see $log)"
-# [omarchy]'s packaging key, trusted as an Omarchy machine trusts it: by the fingerprint Omarchy pins
-# (bin/omarchy-update-keyring, basecamp/omarchy v4.0.6; data, not instructions), fetched from the key server Omarchy
-# names, and used only if the file holds that one key. Over HTTPS (curl follows the proxy settings; gpg's own key fetch
-# does not by default).
-omarchy_fpr=40DFB630FF42BCFFB047046CF0134EE680CAC571
-okey=$(mktemp -d)
-curl -fsSL --retry 3 -o "$okey/omarchy.asc" "https://keys.openpgp.org/vks/v1/by-fingerprint/$omarchy_fpr" >>"$log" 2>&1 ||
-  die "cannot fetch Omarchy's packaging key $omarchy_fpr from keys.openpgp.org (see $log)"
-ofprs=$(gpg --homedir "$okey" --batch --no-tty --with-colons --show-keys "$okey/omarchy.asc" 2>>"$log" |
-  awk -F: '$1=="pub"{p=1;next} $1=="fpr"&&p{print $10} {p=0}' || true)
-[[ $ofprs == "$omarchy_fpr" ]] || die "keys.openpgp.org did not answer with Omarchy's key $omarchy_fpr alone (got: ${ofprs:-nothing})"
-{ pacman-key --add "$okey/omarchy.asc" && pacman-key --lsign-key "$omarchy_fpr"; } >>"$log" 2>&1 ||
-  die "cannot trust Omarchy's packaging key (see $log)"
-rm -rf "$okey"
-echo "[omarchy] signer trusted, fingerprint $omarchy_fpr"
-pacman -Syu --noconfirm --needed base-devel git diffutils >>"$log" 2>&1 || die "pacman -Syu base-devel git diffutils (see $log)"
+# [omarchy]'s signer, trusted as an Omarchy machine trusts it, by the fingerprint Omarchy pins: scripts/omarchy-trust.sh,
+# the step tests/smoke.sh takes too. It prints the line naming the fingerprint.
+"$here/scripts/omarchy-trust.sh" 2>>"$log" || die "cannot trust [omarchy]'s signer (see $log)"
+# [omarchy] comes first, so it also wins a virtual dependency it can provide (pacman takes the first provider in repository
+# order under --noconfirm): qt6-webengine's ttf-font would be [omarchy]'s 152 MB maplemono-nf-cn. A font of [extra] is
+# installed first; mesa is opengl-driver's provider because every depends array names it first. Which packages came from
+# [omarchy] is printed after makepkg.
+pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu >>"$log" 2>&1 ||
+  die "pacman -Syu base-devel git diffutils ttf-dejavu (see $log)"
 id -u builder >/dev/null 2>&1 || useradd -m builder
 printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman\n' >/etc/sudoers.d/90-builder
 chmod 440 /etc/sudoers.d/90-builder
@@ -196,11 +189,13 @@ deps=$(bsdtar -xOf "$desktop" usr/share/grassfield/BUILD-DEPS 2>/dev/null) && [[
   die "grassfield-desktop has no BUILD-DEPS: a ref from before Software Update's compatibility check (grassfield ADR-0033 s3.4)"
 while read -r dep dep_version; do
   [[ -n $dep ]] || continue
-  served=$(pacman -Sddp --print-format '%r %v' "$dep" 2>>"$log") || die "BUILD-DEPS names $dep, which no repository of build/pacman.conf serves"
+  served=$(pacman -Sddp --print-format '%r %v' "$dep" </dev/null 2>>"$log") || die "BUILD-DEPS names $dep, which no repository of build/pacman.conf serves"
   [[ ${served#* } == "$dep_version" ]] ||
     die "BUILD-DEPS records $dep $dep_version, but an Omarchy stable machine installs $dep ${served#* } (from [${served%% *}])"
   echo "BUILD-DEPS: $dep $dep_version, from [${served%% *}]"
 done < <(printf '%s\n' "$deps")
+from_omarchy=$(comm -12 <(pacman -Qq | sort) <(pacman -Sl omarchy 2>/dev/null | awk '{ print $2 }' | sort) | tr '\n' ' ')
+echo "installed from [omarchy]: ${from_omarchy:-none}"
 for f in "${built[@]}"; do sign "$f"; done
 printf '%s\n' "${built[@]##*/}" "${keyring_pkg##*/}"
 hyprland=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}') || true

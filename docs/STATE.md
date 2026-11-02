@@ -359,8 +359,25 @@ Last updated: 2026-10-31
       "key" (scripts/build-channel.sh, tests/e2e.sh, this file). They are not secrets: the fingerprint is public, pinned in
       Omarchy's own `omarchy-update-keyring`. Already pushed, so they are listed in a new `.gitleaksignore` (history is
       never rewritten), and the files now say "fpr"/"signer"; gitleaks then: no leaks.
-  - Next: the integrator's review (opus: the build's keyring and CI); Omarchy's packaging key is now trusted in the build
-    container by its pinned fingerprint.
+  - The integrator's review of 4ea067a (opus, security and supply-chain): FAIL on one gap; provenance, the key check and the
+    gitleaks entries hold. Answered in the next commit:
+    - MAJOR: tests/smoke.sh (CI's test job) never trusted [omarchy]'s signer, so quickshell from [omarchy] would have been
+      refused. One helper, scripts/omarchy-trust.sh, now does the pinned-fingerprint step for build-channel.sh and
+      smoke.sh alike; smoke.sh also checks that quickshell came from [omarchy].
+    - Minor: [omarchy] first also wins a virtual dependency it provides. qt6-webengine's ttf-font would have been
+      [omarchy]'s 152 MB maplemono-nf-cn: the build installs ttf-dejavu from [extra] first. Mesa answers opengl-driver
+      because every depends array names it first. The build prints which packages came from [omarchy], and the e2e
+      expects quickshell alone.
+    - Minor: the lsign trusts Omarchy's signer for [core] and [extra] too, since pacman has one keyring for every
+      repository and no per-repository trust. That is the same as an Omarchy machine, in a container thrown away after
+      one build or test. It is said in the helper.
+    - Nits: a secret key in the answer is refused too (only one primary key, public); `pacman -Sddp` reads /dev/null, not
+      the loop's input; the helper removes its temporary folder on every path.
+    - Information, from grassfield ADR-0033 s3.4: builds from this set record quickshell 0.3.2.r7.g2b4501a-1 and qt6-base
+      6.12.0-3. A machine still ordered like Omarchy 4.0.4, with [omarchy] last (quickshell 0.3.1-1, qt6-base 6.11.2-3),
+      has those updates refused by Software Update until Omarchy 4.0.6's migration 1791403252 puts [omarchy] first and
+      its next update aligns it. This is expected. The owner's local builds are not affected.
+  - Next: the integrator's delta re-review.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
