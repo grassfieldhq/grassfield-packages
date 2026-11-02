@@ -369,7 +369,7 @@ Last updated: 2026-10-31
       because every depends array names it first. The build prints which packages came from [omarchy], and the e2e
       expects quickshell alone.
     - Minor: the lsign trusts Omarchy's signer for [core] and [extra] too, since pacman has one keyring for every
-      repository and no per-repository trust. That is the same as an Omarchy machine, in a container thrown away after
+      repository: a SigLevel can be set per repository, but there is no per-repository keyring. That is the same as an Omarchy machine, in a container thrown away after
       one build or test. It is said in the helper.
     - Nits: a secret key in the answer is refused too (only one primary key, public); `pacman -Sddp` reads /dev/null, not
       the loop's input; the helper removes its temporary folder on every path.
