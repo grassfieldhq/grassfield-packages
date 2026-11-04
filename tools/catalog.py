@@ -1654,9 +1654,23 @@ def sign(path, homedir, key):
     sig = path + ".sig"
     if os.path.exists(sig):
         os.unlink(sig)
-    subprocess.run(["gpg", "--batch", "--no-tty", "--yes", "--homedir", homedir, "--local-user", key + "!",
-                    "--detach-sign", "--output", sig, path], check=True, stdin=subprocess.DEVNULL,
-                   env=child_env(homedir))
+    # A protected key: the passphrase comes from GRASSFIELD_SIGNING_PASSPHRASE (the publisher's environment), by loopback
+    # pinentry on a pipe's file descriptor, as scripts/sign-release.sh does. Never on argv, never stripped from the key.
+    passphrase = os.environ.get("GRASSFIELD_SIGNING_PASSPHRASE", "")
+    args = ["gpg", "--batch", "--no-tty", "--yes", "--homedir", homedir, "--local-user", key + "!"]
+    fds = ()
+    if passphrase:
+        r, w = os.pipe()
+        os.write(w, passphrase.encode())  # a passphrase is far below the pipe's capacity
+        os.close(w)
+        args += ["--pinentry-mode", "loopback", "--passphrase-fd", str(r)]
+        fds = (r,)
+    try:
+        subprocess.run(args + ["--detach-sign", "--output", sig, path], check=True, stdin=subprocess.DEVNULL,
+                       env=child_env(homedir), pass_fds=fds)
+    finally:
+        for fd in fds:
+            os.close(fd)
     return sig
 
 

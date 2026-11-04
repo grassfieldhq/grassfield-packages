@@ -296,7 +296,7 @@ grep -E '" 30[24] ' "$W/serve.log" | head -n 4 | sed 's/^/   /'
 kill "$server" 2>/dev/null
 expect "the tree after the rollback still follows the contract" check_tree
 
-say "removal, and the real keyless keyring"
+say "removal, and the real keyring (the owner's key)"
 pacman -Rn --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring >"$W/rn.log" 2>&1; rc=$?
 sections() { grep -c '^\[grassfield\]' /etc/pacman.conf; }   # build/pacman.conf mentions grassfield in comments
 echo "   pacman -Rn exit $rc; [grassfield] sections $(sections); K '$(validity "$K")'"
@@ -314,8 +314,9 @@ cp -a "$P/keyring" "$W/real-keyring" && chown -R builder: "$W/real-keyring"
 pacman -U --noconfirm "$W"/real-keyring/grassfield-keyring-*.pkg.tar.zst >>"$W/client.log" 2>&1; rc=$?
 after=$(gpg --homedir /etc/pacman.d/gnupg --batch --with-colons --list-keys 2>/dev/null | grep -c '^pub:')
 ours=$(gpg --homedir /etc/pacman.d/gnupg --batch --with-colons --list-keys 2>/dev/null | grep -ci '^uid:.*grassfield')
-expect "this repository's keyring (no key until O11): pacman -U exit 0, installed, empty, trusts nothing ($before keys before, $after after, $ours Grassfield uid)" \
-  test "$rc:$(pacman -Qq grassfield-keyring 2>/dev/null):$(cat /usr/share/grassfield/pacman-keyring/* | wc -c):$before:$ours" == "0:grassfield-keyring:0:$after:0"
+want=$(cat "$P"/keyring/grassfield.gpg "$P"/keyring/grassfield-trusted "$P"/keyring/grassfield-revoked | wc -c)
+expect "this repository's keyring (the owner's key): pacman -U exit 0, installed, its files as in keyring/, trusts nothing while no [grassfield] section exists ($before keys before, $after after, $ours Grassfield uid)" \
+  test "$rc:$(pacman -Qq grassfield-keyring 2>/dev/null):$(cat /usr/share/grassfield/pacman-keyring/* | wc -c):$before:$ours" == "0:grassfield-keyring:$want:$after:0"
 expect "... and removes cleanly" pacman -Rn --noconfirm grassfield-keyring
 
 say "done: $checks checks, $fails failure(s)"

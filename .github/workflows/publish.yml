@@ -1,20 +1,24 @@
 # The serialized publisher of each channel (grassfieldhq/grassfield ADR-0033 h.2 as amended by ADR-0037 g; tools/publish.py).
 #
-# DISABLED. Nothing is published until the owner decides, after the M5 legal review (CLAUDE.md). The job is `if: false`
-# and its first step fails, so it never runs; it reads no secret and writes nowhere. Enabling it is the owner's decision,
-# with the host chosen (ADR-0033 O8), the owner's key and the storage credentials set in the protected environments below
-# (ADR-0033 g "From the owner, later"), never by an agent.
+# ENABLED by the owner's decision of 2026-11-04 (publish now at https://packages.grassfield.site, unannounced; the legal
+# review stays mandatory before any announcement). Each run of a channel waits for the owner's approval in that channel's
+# protected environment (publish-stable, publish-beta: required reviewer, deployments from main only), which holds the
+# signing key and the bucket's S3 token. Nothing here runs on a pull_request, and no other workflow reads those secrets
+# except build.yml's release job, in the same environments.
 #
 # Its own workflow, so that neither a pull request nor a manual dispatch from another branch ever starts it (catalog.yml
 # checks those; ADR-0033 b.7: the key is used by the signing and publishing jobs only, never on a pull_request), and
 # every publishing run of a channel, whatever started it, waits in that channel's one concurrency group: a change on
 # main, or a release build of ADR-0033 (build.yml: its release job keeps a tag's signed release builds under
-# releases/<channel>/ in the bucket, then this workflow starts when the build workflow completes, workflow_run). When it
-# is enabled, the job's condition becomes: a push, or a build workflow that succeeded.
+# releases/<channel>/ in the bucket, then this workflow starts when the build workflow completes, workflow_run).
 # GitHub runs one at a time, never cancels the running one (cancel-in-progress: false) and cancels a waiting run when a
 # newer one queues. So a run takes nothing from its trigger and publishes the latest state: the catalog built from
 # main's head as it is when the run starts, and the newest release built and signed for the channel; tools/publish.py
 # builds the new snapshot from the current one and writes the pointer only if it has not moved.
+#
+# The key meets only tools/catalog.py (main's own code, reading the catalog's sources) in the step that signs the catalog;
+# the S3 token meets only the steps that read or write the bucket; they never share a step. A release's packages are
+# never read by a step that holds the key (build.yml signs them in a container without network).
 name: publish
 
 on:
@@ -29,31 +33,39 @@ permissions:
 
 jobs:
   publish:
-    if: false
+    # A push to main, or a build of main that succeeded, started by hand in this repository (a build run from another
+    # branch publishes nothing; a fork's workflow named "build" cannot raise approval prompts).
+    if: >-
+      github.repository == 'grassfieldhq/grassfield-packages' &&
+      (github.event_name == 'push' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event == 'workflow_dispatch' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         channel: [stable, beta]
-    # Created and protected by the owner when publishing is enabled (ADR-0033 b.7): the owner approves each run (required
-    # reviewers) and only main may deploy to it; it will hold that channel's key and storage credentials. None exists today.
-    # GitHub creates a missing environment, unprotected, the first time a job that names it runs: the owner creates and
-    # protects publish-stable and publish-beta BEFORE `if: false` is removed (owner step, docs/STATE.md).
+    # The owner approves each run (required reviewer) and only main may deploy to it; it holds that channel's key and
+    # storage credentials.
     environment: publish-${{ matrix.channel }}
     concurrency:
       group: publish-${{ matrix.channel }}
       cancel-in-progress: false
+    env:
+      CHANNEL: ${{ matrix.channel }}
+      BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
+      ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
+      # R2 does not take the newer default checksums of the AWS command line.
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
     container:
       image: archlinux:base@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0
     steps:
-      - name: Disabled
-        run: |
-          echo "Publishing is disabled until the owner decides (CLAUDE.md); the bucket's backend waits for the host." >&2
-          exit 1
-
       - name: Tools (a whole upgrade, never -Sy alone; vercmp comes with pacman, bsdtar with libarchive)
-        run: pacman -Syu --noconfirm --needed git python gnupg pacman libarchive
+        run: pacman -Syu --noconfirm --needed git python gnupg pacman libarchive aws-cli-v2
 
       # main's head when this step runs, not the commit that started the run.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -62,20 +74,58 @@ jobs:
           persist-credentials: false
 
       - name: Main's head, never another commit
-        run: test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
 
       - name: Build the catalog for the channel
         run: |
           python3 -I tools/catalog.py validate
-          python3 -I tools/catalog.py build --channel "${{ matrix.channel }}" --serial "$(date -u +%s)" --out /tmp/catalog
+          python3 -I tools/catalog.py build --channel "$CHANNEL" --serial "$(date -u +%s)" --out /tmp/catalog
 
-      # Then, once the owner decides: sign /tmp/catalog/grassfield-catalog.v1.json with the owner's key from this
-      # environment (catalog.py sign); fetch the channel's release builds, releases/<channel>/ in the bucket (build.yml's
-      # release job keeps each tag's there, signed and checked, its database last; a rollback moves withdrawn ones to
-      # withdrawn/<channel>/), into /tmp/releases; and run
-      #   tools/publish.py --store <the bucket> --channel <channel> --releases /tmp/releases
-      #                    --keyring-dir <grassfield-keyring's files> --catalog /tmp/catalog
-      # which checks every release file's signature and the catalog as the Store does, and publishes the newest release
-      # build when it is newer than the snapshot's, never an older database. The bucket's backend waits for the host.
+      # The only step with the key: it signs the catalog (main's own code), nothing else, no network use.
+      - name: Sign the catalog with the project's key
+        env:
+          GRASSFIELD_SIGNING_KEY: ${{ secrets.GRASSFIELD_SIGNING_KEY }}
+          GRASSFIELD_SIGNING_PASSPHRASE: ${{ secrets.GRASSFIELD_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME=$(mktemp -d)
+          # On every exit path: no gpg-agent outlives the step with the key, and the key's home goes.
+          trap 'gpgconf --kill all || true; rm -rf "$GNUPGHOME"' EXIT
+          printf '%s' "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+            --import <(printf '%s\n' "$GRASSFIELD_SIGNING_KEY")
+          key=$(gpg --with-colons --list-secret-keys | awk -F: '$1=="fpr" {print $10; exit}')
+          grep -q "^$key:" keyring/grassfield-trusted || { echo "::error::the key in this environment is not in keyring/"; exit 1; }
+          # catalog.py sign reads GRASSFIELD_SIGNING_PASSPHRASE from this step's environment and gives it to gpg on a
+          # file descriptor (loopback pinentry): the key keeps its passphrase, nothing on a command line.
+          python3 -I tools/catalog.py sign --homedir "$GNUPGHOME" --key "$key" /tmp/catalog/grassfield-catalog.v1.json
+
+      - name: The release builds kept for this channel (build.yml's release job writes them), and whether anything can be published
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/releases
+          aws --endpoint-url "$ENDPOINT" s3 sync "s3://$BUCKET/releases/$CHANNEL/" /tmp/releases/ --only-show-errors
+          # No release built for this channel and nothing published yet: a snapshot without grassfield.db fails every
+          # client, so there is nothing to do (a catalog alone cannot start a channel).
+          if [ -z "$(ls -A /tmp/releases)" ]; then
+            if ! err=$(aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$CHANNEL/x86_64/pointer" 2>&1 >/dev/null); then
+              grep -qE '\(404\)|Not Found' <<<"$err" || { echo "::error::pointer: $err"; exit 1; }
+              echo "No release is built for $CHANNEL and none is published: nothing to publish."
+              echo "SKIP=1" >>"$GITHUB_ENV"
+            fi
+          fi
+
+      - name: Publish (tools/publish.py checks every signature against keyring/, never goes backwards, writes the pointer last)
+        if: env.SKIP != '1'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.GRASSFIELD_S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.GRASSFIELD_S3_SECRET_ACCESS_KEY }}
+        run: |
+          python3 -I tools/publish.py --s3-bucket "$BUCKET" --s3-endpoint "$ENDPOINT" --channel "$CHANNEL" \
+            --releases /tmp/releases --keyring-dir keyring --catalog /tmp/catalog
       # ADR-0033 h.2's deliberate rollback is the owner's, by hand in this concurrency group (scripts/rollback.sh:
       # tools/publish.py --rollback-to).

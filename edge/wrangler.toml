@@ -1,0 +1,41 @@
+# The edge of packages.grassfield.site (grassfield ADR-0033 h.5): the pointer rule and the bucket's cache headers.
+# Deployed by hand, from this folder, by the owner or the integrator, never by CI (README, "First run").
+name = "grassfield-packages-edge"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+preview_urls = false
+
+# Read only: the Worker never writes. The publisher writes with its own bucket-scoped S3 token.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "grassfield"
+
+# As narrow as Cloudflare's route patterns allow (a trailing `*` only): the Worker is asked for the fixed names alone, so
+# packages, snapshot files, icons and the pointer go straight to the bucket's custom domain (the free plan's 100,000
+# Worker requests a day are then spent on the databases and notes only). `grassfield.*` is the two databases and their
+# signatures; it does not match grassfield-notes.json, grassfield-catalog.v1.json or any grassfield-*.pkg.tar.zst.
+# worker.js still passes any other path through to the bucket, should a pattern ever match one.
+[[routes]]
+pattern = "packages.grassfield.site/stable/x86_64/grassfield.*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/stable/x86_64/grassfield-notes.json*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/stable/x86_64/grassfield-catalog.v1.json*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/beta/x86_64/grassfield.*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/beta/x86_64/grassfield-notes.json*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/beta/x86_64/grassfield-catalog.v1.json*"
+zone_name = "grassfield.site"
