@@ -11,6 +11,31 @@ preview_urls = false
 binding = "BUCKET"
 bucket_name = "grassfield"
 
+# As narrow as Cloudflare's route patterns allow (a trailing `*` only): the Worker is asked for the fixed names alone, so
+# packages, snapshot files, icons and the pointer go straight to the bucket's custom domain (the free plan's 100,000
+# Worker requests a day are then spent on the databases and notes only). `grassfield.*` is the two databases and their
+# signatures; it does not match grassfield-notes.json, grassfield-catalog.v1.json or any grassfield-*.pkg.tar.zst.
+# worker.js still passes any other path through to the bucket, should a pattern ever match one.
 [[routes]]
-pattern = "packages.grassfield.site/*"
+pattern = "packages.grassfield.site/stable/x86_64/grassfield.*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/stable/x86_64/grassfield-notes.json*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/stable/x86_64/grassfield-catalog.v1.json*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/beta/x86_64/grassfield.*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/beta/x86_64/grassfield-notes.json*"
+zone_name = "grassfield.site"
+
+[[routes]]
+pattern = "packages.grassfield.site/beta/x86_64/grassfield-catalog.v1.json*"
 zone_name = "grassfield.site"

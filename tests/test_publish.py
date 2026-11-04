@@ -346,7 +346,8 @@ class Publisher(unittest.TestCase):
         for s in (old, new):
             os.utime(os.path.join(self.store.base, "snap", s), (0, 0))
         publish.prune(self.store, 7, now=1793095200 + 30 * 86400)
-        self.assertEqual([s for s, _ in self.store.snapshots()], [new])
+        # the current one and, whatever its age, the previous one (the rollback target): see tests/test_s3store.py Prune
+        self.assertEqual(sorted(s for s, _ in self.store.snapshots()), sorted([old, new]))
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, readFileSync, statSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,11 +27,12 @@ for (const n of NAMES) put(`stable/x86_64/snap/${SNAP}/${n}`, `content of ${n}`)
 put("stable/x86_64/pkg-1.0-1-x86_64.pkg.tar.zst", "0123456789");
 
 // A mocked R2 binding over the tree: get(key, {range, onlyIf}), head(key).
-function object(key, body) {
+function object(key, body, mtimeMs) {
   const size = body.length;
   return {
     size,
     key,
+    uploaded: new Date(mtimeMs),
     httpEtag: `"etag-${key.length}"`,
     writeHttpMetadata(h) { h.set("Content-Type", "application/octet-stream"); },
     text: async () => body.toString("utf8"),
@@ -43,7 +44,7 @@ const BUCKET = {
     const p = join(root, key);
     if (!existsSync(p) || !statSync(p).isFile()) return null;
     const data = readFileSync(p);
-    const o = object(key, data);
+    const o = object(key, data, statSync(p).mtimeMs);
     const range = options.range?.get?.("range");
     if (range) {
       const m = /^bytes=(\d+)-(\d*)$/.exec(range);
@@ -53,6 +54,8 @@ const BUCKET = {
       o.body = new Blob([data.subarray(offset, end + 1)]).stream();
     }
     if (options.onlyIf?.get?.("if-none-match") === o.httpEtag) delete o.body;
+    const ims = options.onlyIf?.get?.("if-modified-since");
+    if (ims && Math.floor(o.uploaded.getTime() / 1000) <= Math.floor(Date.parse(ims) / 1000)) delete o.body;
     return o;
   },
   async head(key) {
@@ -163,4 +166,47 @@ test("a range request is a 206 (pacman resumes downloads); a matching ETag is a 
   const h = await call("/stable/x86_64/pkg-1.0-1-x86_64.pkg.tar.zst", { method: "HEAD" });
   assert.equal(h.status, 200);
   assert.equal(h.headers.get("content-length"), "10");
+});
+
+// A pointer switch with If-Modified-Since: pacman keeps the Last-Modified of what it downloaded as the file's mtime.
+test("Last-Modified is sent, and If-Modified-Since across a pointer switch behaves as serve.py", async () => {
+  const old = "20261101T000000Z-aaaaaaaaaaaa", fresh = "20261103T000000Z-bbbbbbbbbbbb";
+  const t1 = 1793000000, t2 = 1793100000; // seconds: the new snapshot is uploaded later
+  for (const [id, t] of [[old, t1], [fresh, t2]]) {
+    put(`stable/x86_64/snap/${id}/grassfield.db`, `db ${id}`);
+    utimesSync(join(root, `stable/x86_64/snap/${id}/grassfield.db`), t, t);
+  }
+  const fixed = "/stable/x86_64/grassfield.db";
+  const lm = {};
+  for (const [label, id] of [["old", old], ["fresh", fresh]]) {
+    const p = `/stable/x86_64/snap/${id}/grassfield.db`;
+    const [a, b] = [await call(p), await ref(p)];
+    assert.equal(a.status, 200);
+    assert.ok(a.headers.get("last-modified"), "Last-Modified on the worker");
+    assert.equal(a.headers.get("last-modified"), b.headers.get("last-modified"), label);
+    lm[label] = a.headers.get("last-modified");
+  }
+  // The client holds the old database (mtime = its Last-Modified); the pointer now names the fresh one.
+  put("stable/x86_64/pointer", JSON.stringify({ snapshot: fresh }));
+  const h = { "If-Modified-Since": lm.old };
+  // the redirect is never conditional: serve.py answers 302 whatever the client sends
+  const [ra, rb] = [await call(fixed, { headers: h }), await ref(fixed, { headers: h })];
+  assert.equal(ra.status, 302);
+  assert.equal(rb.status, 302);
+  assert.equal(ra.headers.get("location"), rb.headers.get("location"));
+  // its target is newer than the client's copy: 200 with the new content, on both
+  const path = new URL(ra.headers.get("location"), "https://x").pathname;
+  const [ta, tb] = [await call(path, { headers: h }), await ref(path, { headers: h })];
+  assert.equal(ta.status, 200);
+  assert.equal(tb.status, 200);
+  assert.equal(await ta.text(), `db ${fresh}`);
+  // a client already holding the fresh one: 304 on the target, still 302 on the fixed name, on both
+  const h2 = { "If-Modified-Since": lm.fresh };
+  assert.equal((await call(path, { headers: h2 })).status, 304);
+  assert.equal((await ref(path, { headers: h2 })).status, 304);
+  assert.equal((await call(fixed, { headers: h2 })).status, 302);
+  assert.equal((await ref(fixed, { headers: h2 })).status, 302);
+  // a pass-through object carries Last-Modified too
+  assert.ok((await call("/stable/x86_64/pkg-1.0-1-x86_64.pkg.tar.zst")).headers.get("last-modified"));
+  put("stable/x86_64/pointer", JSON.stringify({ snapshot: SNAP }));
 });

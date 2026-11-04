@@ -465,12 +465,17 @@ def rollback(store, target, now=None, keyring_dir=None):
         raise RuntimeError(f"the pointer moved {ATTEMPTS} times in a row")
 
 
-def prune(store, keep_days, now=None):
-    """Snapshots are kept 7 days (ADR-0033 h.2); the current one always."""
+KEEP_SNAPSHOTS = 2  # at least: the snapshots before the current one, whatever their age (the rollback targets)
+
+
+def prune(store, keep_days, now=None, keep_snapshots=KEEP_SNAPSHOTS):
+    """Snapshots are kept 7 days (ADR-0033 h.2), but the current one always and the newest `keep_snapshots` (at least 2)
+    others whatever their age: after a gap of more than 7 days, the previous snapshot is still a rollback's target."""
     current, _ = store.read_pointer()
     limit = (now if now is not None else time.time()) - keep_days * 86400
-    for snapshot, mtime in store.snapshots():
-        if snapshot != current and mtime < limit:
+    others = sorted(((m, s) for s, m in store.snapshots() if s != current), reverse=True)
+    for mtime, snapshot in others[max(keep_snapshots, KEEP_SNAPSHOTS):]:
+        if mtime < limit:
             store.drop_snapshot(snapshot)
 
 

@@ -33,11 +33,14 @@ permissions:
 
 jobs:
   publish:
-    # A push to main, or a build of main that succeeded (a build run from another branch publishes nothing).
+    # A push to main, or a build of main that succeeded, started by hand in this repository (a build run from another
+    # branch publishes nothing; a fork's workflow named "build" cannot raise approval prompts).
     if: >-
       github.repository == 'grassfieldhq/grassfield-packages' &&
       (github.event_name == 'push' ||
-       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.event == 'workflow_dispatch' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -88,12 +91,15 @@ jobs:
         run: |
           set -euo pipefail
           export GNUPGHOME=$(mktemp -d)
+          # On every exit path: no gpg-agent outlives the step with the key, and the key's home goes.
+          trap 'gpgconf --kill all || true; rm -rf "$GNUPGHOME"' EXIT
           printf '%s' "$GRASSFIELD_SIGNING_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
             --import <(printf '%s\n' "$GRASSFIELD_SIGNING_KEY")
           key=$(gpg --with-colons --list-secret-keys | awk -F: '$1=="fpr" {print $10; exit}')
           grep -q "^$key:" keyring/grassfield-trusted || { echo "::error::the key in this environment is not in keyring/"; exit 1; }
+          # catalog.py sign reads GRASSFIELD_SIGNING_PASSPHRASE from this step's environment and gives it to gpg on a
+          # file descriptor (loopback pinentry): the key keeps its passphrase, nothing on a command line.
           python3 -I tools/catalog.py sign --homedir "$GNUPGHOME" --key "$key" /tmp/catalog/grassfield-catalog.v1.json
-          rm -rf "$GNUPGHOME"
 
       - name: The release builds kept for this channel (build.yml's release job writes them), and whether anything can be published
         env:

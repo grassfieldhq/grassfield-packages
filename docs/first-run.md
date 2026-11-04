@@ -34,7 +34,7 @@ release build and stops with "this tag does not go to ...": approve or reject it
        npm ci                          # wrangler 4.150.0, from package-lock.json
        npm test                        # the Worker against scripts/serve.py, no network
        npx wrangler deploy --dry-run   # shows the binding and the route, writes nothing
-       npx wrangler deploy             # route packages.grassfield.site/*, R2 binding BUCKET -> grassfield
+       npx wrangler deploy             # six routes on packages.grassfield.site (the fixed names only), R2 binding BUCKET -> grassfield
 
    If `curl -sI https://packages.grassfield.site/stable/x86_64/grassfield.db` after step 7 answers a plain R2 404 and not
    the Worker's, the route is not in front of the bucket's custom domain (ADR-0033 h.5 marks this NOT VERIFIED): stop and
@@ -75,6 +75,17 @@ release build and stops with "this tag does not go to ...": approve or reject it
 
    (`tests/e2e.sh` is the full exercise on the local trees; it needs docker and about an hour.)
 8. Beta: the same with a `-betaN` tag and `publish-beta`.
+
+## Availability: the Worker's request quota (an owner decision, not coded)
+
+The Worker runs on Cloudflare's free plan: about 100,000 requests a day. Past that, requests the Worker would answer fail,
+and those are exactly the fixed names (`grassfield.db`, `.files`, notes, catalog, each with `.sig`): pacman cannot read the
+database, so every Omarchy update fails for everyone until the next day or a paid plan. The integrator raises it with the
+owner. What was done to keep the use small: `edge/wrangler.toml` has six narrow routes (the fixed names of each channel,
+`grassfield.*`, `grassfield-notes.json*`, `grassfield-catalog.v1.json*`; Cloudflare patterns take a wildcard only at the
+end), so packages, snapshot files, icons and the pointer never go through the Worker; they are served by the bucket's
+custom domain with the headers the publisher sets at upload. Route patterns in front of an R2 custom domain are NOT
+VERIFIED (step 2); `worker.js` also answers any other path it is given.
 
 ## Not verified before the first run
 

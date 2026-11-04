@@ -127,5 +127,38 @@ class S3(unittest.TestCase):
             broken.read_pointer()
 
 
+class Prune(unittest.TestCase):
+    """prune keeps the current snapshot and the two before it whatever their age (a rollback's targets)."""
+
+    def test_old_snapshots_beyond_the_two_previous_go_the_previous_two_stay(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        store = publish.LocalStore(tmp, "stable", "x86_64")
+        ids = [f"2026010{i}T000000Z-00000000000{i}" for i in range(1, 6)]  # oldest first
+        for n, snap in enumerate(ids):
+            os.makedirs(os.path.join(store.base, "snap", snap))
+            os.utime(os.path.join(store.base, "snap", snap), (1000 + n, 1000 + n))
+        with open(os.path.join(store.base, "pointer"), "w") as f:
+            json.dump({"snapshot": ids[-1]}, f)
+        publish.prune(store, 7, now=1000 + 30 * 86400)  # all of them are far older than 7 days
+        self.assertEqual(sorted(s for s, _ in store.snapshots()), ids[-3:])
+        # a recent snapshot is kept even beyond them while younger than 7 days
+        publish.prune(store, 7, now=1002 + 86400)
+        self.assertEqual(sorted(s for s, _ in store.snapshots()), ids[-3:])
+
+    def test_current_is_kept_when_it_is_not_the_newest(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        store = publish.LocalStore(tmp, "stable", "x86_64")
+        ids = [f"2026010{i}T000000Z-00000000000{i}" for i in range(1, 6)]
+        for n, snap in enumerate(ids):
+            os.makedirs(os.path.join(store.base, "snap", snap))
+            os.utime(os.path.join(store.base, "snap", snap), (1000 + n, 1000 + n))
+        with open(os.path.join(store.base, "pointer"), "w") as f:
+            json.dump({"snapshot": ids[0]}, f)
+        publish.prune(store, 7, now=1000 + 30 * 86400)
+        self.assertEqual(sorted(s for s, _ in store.snapshots()), sorted([ids[0], ids[-1], ids[-2]]))
+
+
 if __name__ == "__main__":
     unittest.main()

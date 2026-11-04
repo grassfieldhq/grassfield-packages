@@ -66,6 +66,10 @@ export async function handle(request, env) {
   if (object === null) return plain(404, "not found");
   object.writeHttpMetadata(headers);
   headers.set("ETag", object.httpEtag);
+  // pacman gives a downloaded file the server's Last-Modified as its mtime (curl -R) and asks with If-Modified-Since: with
+  // none, the file's mtime is the download time, and a database fetched before a newer snapshot's pointer write, or by a
+  // client whose clock runs ahead, would be answered 304 for the new one. serve.py sends it too (http.server).
+  if (object.uploaded instanceof Date) headers.set("Last-Modified", object.uploaded.toUTCString());
   headers.set("Accept-Ranges", "bytes");
   headers.set("Cache-Control", cacheControlFor(key));
   if (request.method === "HEAD") {
