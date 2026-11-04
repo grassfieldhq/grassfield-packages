@@ -33,6 +33,10 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
+    # actions: read lets a run of main ask which ref saved a cache it restored (the guard step); nothing here writes.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: The deploy key exists
         env:
@@ -51,15 +55,94 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           path: grassfield
+      # Caches (docs/build-caches.md). Scope: a cache is visible to the ref that saved it and to runs of the default branch's
+      # saves only (GitHub's rule: a branch reads its own and main's, never a sibling's or a pull request's; a tag or a
+      # main run reads main's). Key names carry the scope as well ("main" or "dev"), and a run of main checks, through the
+      # API, that what it restored was saved by main.
+      - name: Which caches this run may use
+        id: mode
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+          RELEASE_CACHE: ${{ vars.GRASSFIELD_RELEASE_CACHE }}
+        run: |
+          set -euo pipefail
+          digest=${IMAGE##*sha256:}; digest=${digest:0:16}
+          scope=dev; [ "$GITHUB_REF" = refs/heads/main ] && scope=main
+          # What the release job would sign is built by a run of main for a tag: that build uses no ccache and no data cache
+          # unless the owner opts in (GRASSFIELD_RELEASE_CACHE=on). The pacman cache is verified by pacman: always on.
+          release_bound=false
+          [ "$scope" = main ] && [[ $REF_INPUT == v* ]] && release_bound=true
+          build_cache=true
+          [ "$release_bound" = true ] && [ "$RELEASE_CACHE" != on ] && build_cache=false
+          # main's caches are written by release-bound builds only (a main run of a commit reads them, never writes).
+          save_build_cache=$build_cache
+          [ "$scope" = main ] && [ "$release_bound" = false ] && save_build_cache=false
+          {
+            echo "digest=$digest"; echo "scope=$scope"; echo "release_bound=$release_bound"
+            echo "build_cache=$build_cache"; echo "save_build_cache=$save_build_cache"
+          } >>"$GITHUB_OUTPUT"
+          echo "scope $scope, release-bound $release_bound, ccache and data cache $build_cache (saved: $save_build_cache)"
+          mkdir -p cache/pacman cache/ccache cache/data
+      - name: Restore the pacman cache
+        id: pacman-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: cache/pacman
+          key: pacman-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'grassfield/packaging/arch/PKGBUILD') }}
+          restore-keys: |
+            pacman-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-
+            pacman-main-${{ steps.mode.outputs.digest }}-
+      - name: Restore the ccache folder
+        id: ccache
+        if: steps.mode.outputs.build_cache == 'true'
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: cache/ccache
+          key: ccache-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-
+            ccache-main-${{ steps.mode.outputs.digest }}-
+      - name: Restore the data products (composed icons and shrunk photographs, keyed by their inputs)
+        id: data
+        if: steps.mode.outputs.build_cache == 'true'
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: cache/data
+          key: data-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-${{ hashFiles('grassfield/packaging/arch/icon*', 'grassfield/packaging/arch/wallpaper*', 'grassfield/branding/icons/theme/**', 'grassfield/branding/cursors/**', 'grassfield/packaging/plymouth/**', 'grassfield/apps/wallpaper-tool/**') }}
+          restore-keys: |
+            data-main-${{ steps.mode.outputs.digest }}-${{ hashFiles('grassfield/packaging/arch/icon*', 'grassfield/packaging/arch/wallpaper*', 'grassfield/branding/icons/theme/**', 'grassfield/branding/cursors/**', 'grassfield/packaging/plymouth/**', 'grassfield/apps/wallpaper-tool/**') }}
+      - name: A run of main restored only what main saved
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCOPE: ${{ steps.mode.outputs.scope }}
+          MATCHED: ${{ steps.pacman-cache.outputs.cache-matched-key }} ${{ steps.ccache.outputs.cache-matched-key }} ${{ steps.data.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          for k in $MATCHED; do
+            [[ $k == *-main-* ]] || { echo "::error::restored '$k': not a key of main's scope"; exit 1; }
+            n=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/caches" -f key="$k" -f ref=refs/heads/main -f per_page=100 |
+              jq --arg k "$k" '[.actions_caches[] | select(.key == $k and .ref == "refs/heads/main")] | length')
+            [ "$n" -ge 1 ] || { echo "::error::restored '$k': no cache of that name was saved by a run of main"; exit 1; }
+            echo "restored '$k': saved by main"
+          done
       - name: Build in a throwaway Arch container with Omarchy stable's package set, signed by a throwaway key
         env:
           REF: ${{ inputs.ref }}
           PKGREL: ${{ inputs.pkgrel }}
+          BUILD_CACHE: ${{ steps.mode.outputs.build_cache }}
         run: |
           mkdir -p out
-          docker run --rm -e REF -e PKGREL -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/out:/out" \
+          before=$(ls -1 cache/pacman | sha256sum | cut -d' ' -f1)
+          echo "PACMAN_BEFORE=$before" >>"$GITHUB_ENV"
+          cache_args=(-v "$PWD/cache/pacman:/var/cache/pacman/pkg" -e GRASSFIELD_PACMAN_CACHE_PRUNE=1)
+          if [ "$BUILD_CACHE" = true ]; then
+            cache_args+=(-v "$PWD/cache/ccache:/cache/ccache" -e GRASSFIELD_CCACHE_DIR=/cache/ccache
+              -v "$PWD/cache/data:/cache/data" -e GRASSFIELD_DATA_CACHE=/cache/data)
+          fi
+          docker run --rm -e REF -e PKGREL "${cache_args[@]}" -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/out:/out" \
             "$IMAGE" bash -euo pipefail -c '
-              trap "cp /build/build.log /out/build.log 2>/dev/null || true" EXIT
+              trap "mkdir -p /out/build-stats; cp -r /build/stats/. /out/build-stats/ 2>/dev/null; cp /build/build.log /out/build.log 2>/dev/null || true" EXIT
               export GNUPGHOME=$(mktemp -d)
               gpg --batch --pinentry-mode loopback --passphrase "" \
                 --quick-gen-key "Grassfield CI build (throwaway) <ci@grassfield.invalid>" ed25519 sign 14d 2>/dev/null
@@ -68,6 +151,52 @@ jobs:
                 --gnupghome "$GNUPGHOME" --key "$key" ${PKGREL:+--pkgrel "$PKGREL"}
               gpg --export "$key" >/out/build-signing-key.gpg
               /packages/scripts/check-tree.sh --tree /out/tree --keyring /out/build-signing-key.gpg'
+      - name: Timing and cache statistics in the job summary
+        if: always()
+        env:
+          MODE: scope ${{ steps.mode.outputs.scope }}, release-bound ${{ steps.mode.outputs.release_bound }}, ccache and data cache ${{ steps.mode.outputs.build_cache }}
+          PACMAN_HIT: ${{ steps.pacman-cache.outputs.cache-matched-key != '' }}
+          CCACHE_HIT: ${{ steps.ccache.outputs.cache-matched-key != '' }}
+          DATA_HIT: ${{ steps.data.outputs.cache-hit }}
+        run: |
+          d=$RUNNER_TEMP/stats; rm -rf "$d"; mkdir -p "$d"
+          cp -r out/build-stats/. "$d/" 2>/dev/null || true
+          cp out/build.log "$d/" 2>/dev/null || true
+          {
+            echo "## Build: timing and caches"
+            echo
+            echo "$MODE. Restored: pacman $PACMAN_HIT, ccache $CCACHE_HIT, data (exact key) ${DATA_HIT:-false}."
+            echo "Pacman cache $(du -sh cache/pacman | cut -f1), ccache folder $(du -sh cache/ccache | cut -f1), data $(du -sh cache/data | cut -f1)."
+            echo
+            packages/scripts/build-summary.sh "$d"
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: The pacman cache changed
+        id: pacman-after
+        if: success()
+        run: |
+          after=$(ls -1 cache/pacman | sha256sum | cut -d' ' -f1)
+          echo "listing=${after:0:16}" >>"$GITHUB_OUTPUT"
+          [ "$after" != "$PACMAN_BEFORE" ] && echo "changed=true" >>"$GITHUB_OUTPUT" || echo "changed=false" >>"$GITHUB_OUTPUT"
+      # Saves: pacman packages are verified by pacman wherever they come from; the other two are saved only where the mode
+      # says (never by a run of main for a commit), under main's own key names when main saves.
+      - name: Save the pacman cache
+        if: success() && steps.pacman-after.outputs.changed == 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: cache/pacman
+          key: pacman-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'grassfield/packaging/arch/PKGBUILD') }}-${{ steps.pacman-after.outputs.listing }}
+      - name: Save the ccache folder
+        if: success() && steps.mode.outputs.save_build_cache == 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: cache/ccache
+          key: ccache-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-${{ github.run_id }}
+      - name: Save the data products
+        if: success() && steps.mode.outputs.save_build_cache == 'true' && steps.data.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: cache/data
+          key: data-${{ steps.mode.outputs.scope }}-${{ steps.mode.outputs.digest }}-${{ hashFiles('grassfield/packaging/arch/icon*', 'grassfield/packaging/arch/wallpaper*', 'grassfield/branding/icons/theme/**', 'grassfield/branding/cursors/**', 'grassfield/packaging/plymouth/**', 'grassfield/apps/wallpaper-tool/**') }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
