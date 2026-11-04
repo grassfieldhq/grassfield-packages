@@ -142,6 +142,9 @@ class LocalStore:
     def put_snapshot(self, snapshot, files):
         """files: {name: source path}. The snapshot is complete before anything points to it."""
         tmp = tempfile.mkdtemp(dir=os.path.join(self.base, "snap"), prefix=".tmp-")
+        # mkdtemp makes it 0700; a snapshot is read by whoever serves or uploads the tree (build.yml uploads it as an
+        # artifact from outside the container that wrote it as root), like every other directory of the tree.
+        os.chmod(tmp, 0o755)
         for name, source in files.items():
             shutil.copyfile(source, os.path.join(tmp, name))
         os.rename(tmp, os.path.join(self.base, "snap", snapshot))
