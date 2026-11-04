@@ -1,16 +1,16 @@
 # Build one Grassfield tag (or commit) once: its release build for each channel it goes to and a channel tree made from
-# them, as a CI artifact (grassfield ADR-0033 e-h; ADR-0037 g). NOTHING IS PUBLISHED: build and test sign with a throwaway
-# key made in the job (ADR-0033 b.7), so the artifact is for review and tests only, never for clients; it carries the
-# keyless grassfield-keyring (U23) until the owner's key exists. The release job, written and disabled until the owner
-# decides after the M5 legal review (owner decision 2026-10-27), signs a tag's tested release builds with the project's key
-# and keeps them where the channel's one serialized publisher reads them (ADR-0037 g; publish.yml, which starts when this
-# workflow completes).
+# them, as a CI artifact (grassfield ADR-0033 e-h; ADR-0037 g). The build and test jobs sign with a throwaway key made in
+# the job (ADR-0033 b.7): their artifact is for review and tests only, never for clients. The release job (enabled by the
+# owner's decision of 2026-11-04, for a tag run from main) signs a tag's tested release builds with the project's key,
+# after the owner's approval of the channel's environment, and keeps them where the channel's one serialized publisher
+# reads them (ADR-0037 g; publish.yml, which starts when this workflow completes). The tag poll stays off
+# (GRASSFIELD_TAG_POLL, poll.yml): the owner starts this workflow by hand.
 #
-# From the owner, later (none exists; the agent creates none): the secret GRASSFIELD_DEPLOY_KEY, a read-only deploy key of
-# grassfieldhq/grassfield (O13), without which the build stops at its first step; for the release job, the publisher's
-# protected environments publish-stable and publish-beta (the owner approves each run) with the secrets
-# GRASSFIELD_SIGNING_KEY (armored secret key), GRASSFIELD_SIGNING_PASSPHRASE (O6), GRASSFIELD_S3_ACCESS_KEY_ID,
-# GRASSFIELD_S3_SECRET_ACCESS_KEY and the variables GRASSFIELD_S3_BUCKET, GRASSFIELD_S3_ENDPOINT (O8).
+# Set by the owner: the secret GRASSFIELD_DEPLOY_KEY, a read-only deploy key of grassfieldhq/grassfield (O13), without which
+# the build stops at its first step; for the release job, the publisher's protected environments publish-stable and
+# publish-beta (the owner approves each run) with the secrets GRASSFIELD_SIGNING_KEY (armored secret key),
+# GRASSFIELD_SIGNING_PASSPHRASE (O6), GRASSFIELD_S3_ACCESS_KEY_ID, GRASSFIELD_S3_SECRET_ACCESS_KEY and the variables
+# GRASSFIELD_S3_BUCKET, GRASSFIELD_S3_ENDPOINT (O8).
 name: build
 run-name: build ${{ inputs.ref }}${{ inputs.pkgrel && format(' pkgrel {0}', inputs.pkgrel) || '' }}
 on:
@@ -94,12 +94,14 @@ jobs:
             bash /packages/tests/smoke.sh --tree /out/tree --keyring /out/build-signing-key.gpg
 
   release:
-    # DISABLED: the owner removes `if: false` once the environments exist (tags only: startsWith(inputs.ref, 'v')).
+    # ENABLED (owner decision of 2026-11-04), for a tag of main's workflow only: a manual run of this workflow from another
+    # branch builds and tests, and stops there (the environments also accept deployments from main only; this workflow has
+    # no pull_request trigger, so the key never meets one).
     # It holds no build: it receives the tested artifact. Three containers, so that the key never meets anything that
     # reads package contents (review M1: repo-add evaluates .PKGINFO lines): prepare (no key: published packages,
     # keyring/ compared, repo-add), sign (the key, gpg only, on an allowlist of names, no network), check (no key: as a
     # client checks it, the folder's exact contents, the keyring byte for byte keyring/'s). Only then is it uploaded.
-    if: false
+    if: github.ref == 'refs/heads/main' && startsWith(inputs.ref, 'v')
     needs: test
     strategy:
       fail-fast: false
@@ -108,9 +110,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # The publisher's environments (publish.yml): protected, the owner approves each run; each holds that channel's key
-    # and storage credentials. None exists today.
+    # and storage credentials.
     environment: publish-${{ matrix.channel }}
     env:
+      # R2 does not take the newer default checksums of the AWS command line.
+      AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
       CHANNEL: ${{ matrix.channel }}
       BUCKET: ${{ vars.GRASSFIELD_S3_BUCKET }}
       ENDPOINT: ${{ vars.GRASSFIELD_S3_ENDPOINT }}
@@ -189,5 +195,6 @@ jobs:
         run: |
           set -euo pipefail
           dest=s3://$BUCKET/releases/$CHANNEL/$(basename "$REL")
-          aws --endpoint-url "$ENDPOINT" s3 cp --recursive --exclude 'grassfield.db' "$REL/" "$dest/"
-          aws --endpoint-url "$ENDPOINT" s3 cp "$REL/grassfield.db" "$dest/grassfield.db"
+          # Release builds are the publisher's inputs, nothing links to them: never cached.
+          aws --endpoint-url "$ENDPOINT" s3 cp --recursive --cache-control no-store --exclude 'grassfield.db' "$REL/" "$dest/"
+          aws --endpoint-url "$ENDPOINT" s3 cp --cache-control no-store "$REL/grassfield.db" "$dest/grassfield.db"

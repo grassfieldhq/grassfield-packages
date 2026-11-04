@@ -1,0 +1,14 @@
+{
+  "name": "grassfield-packages-edge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker in front of the R2 bucket of packages.grassfield.site (pointer edge rule, ADR-0033 h.5)",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test worker.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.150.0"
+  }
+}

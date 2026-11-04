@@ -14,9 +14,10 @@ docs/STATE.md (every session).
 
 ## Hard rules
 - Evidence before claims: command + exit code + output excerpt.
-- Nothing is published until the owner decides, after the M5 legal review (grassfield `docs/master-prompt.md` §14):
-  no GitHub release, no tag, no secret, no repository visibility change, no upload anywhere. CI produces artifacts
-  only; every publishing job stays disabled.
+- Publication is the owner's (decision of 2026-11-04: live at packages.grassfield.site, unannounced; the legal review of
+  grassfield `docs/master-prompt.md` §14 stays mandatory before any announcement). The publishing jobs run only in the
+  protected environments with the owner's approval. An agent never starts a run, deploys the Worker (`edge/`), writes to
+  the bucket, sets a secret or variable, creates a tag or a GitHub release, or changes the repository's visibility.
 - The real signing key is the owner's: never create, request, print or store it. Tests use throwaway keys made inside a
   test container and removed with it.
 - Package builds and installs (makepkg, pacman, pacman-key, repo-add) run only inside containers or chroots, never on
@@ -29,7 +30,7 @@ docs/STATE.md (every session).
   decision ST10); every source and recipe it names is checked by CI against the pinned Omarchy release, and a recipe that
   syncs (`pacman -Sy`, `-Syu`, `yay -Sy`) is refused, and so is a `repo` app whose package owns no application entry
   (ADR-0037 g, SD1).
-- Publication (written, disabled): one serialized publisher per channel for releases and catalog updates alike; it builds
+- Publication: one serialized publisher per channel for releases and catalog updates alike; it builds
   from the current snapshot, never puts an older package database back, and writes the pointer only if it has not moved
   (ADR-0037 g, ADR-0033 h.2). Each run publishes the latest state (the newest release built for the channel, the catalog of
   `main`'s head), never what its trigger carried: GitHub cancels a waiting run when a newer one queues.

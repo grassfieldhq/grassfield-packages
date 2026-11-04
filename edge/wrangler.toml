@@ -1,0 +1,16 @@
+# The edge of packages.grassfield.site (grassfield ADR-0033 h.5): the pointer rule and the bucket's cache headers.
+# Deployed by hand, from this folder, by the owner or the integrator, never by CI (README, "First run").
+name = "grassfield-packages-edge"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+preview_urls = false
+
+# Read only: the Worker never writes. The publisher writes with its own bucket-scoped S3 token.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "grassfield"
+
+[[routes]]
+pattern = "packages.grassfield.site/*"
+zone_name = "grassfield.site"

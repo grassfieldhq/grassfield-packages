@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""The one publisher of a channel (grassfield ADR-0033 h.2 as amended by ADR-0037 g). Written and disabled: CI never runs it
-until the owner decides, after the M5 legal review (CLAUDE.md). Standard library, plus pacman's `vercmp` and `bsdtar`.
+"""The one publisher of a channel (grassfield ADR-0033 h.2 as amended by ADR-0037 g). Run by publish.yml in the
+protected environment of its channel (owner decision of 2026-11-04). Standard library, plus pacman's `vercmp` and `bsdtar`
+and, for the bucket, the `aws` command line.
 
-  publish.py --store DIR --channel stable [--arch x86_64] --releases DIR --keyring-dir DIR [--catalog DIR]
-             [--keep-days 7]
+  publish.py (--store DIR | --s3-bucket NAME --s3-endpoint URL) --channel stable [--arch x86_64] --releases DIR
+             --keyring-dir DIR [--catalog DIR] [--keep-days 7]
   publish.py --store DIR --channel stable [--arch x86_64] --keyring-dir DIR --rollback-to SNAPSHOT
 
 One run publishes the latest state, never what started it (GitHub cancels a waiting run when a newer one queues, and each
@@ -21,13 +22,15 @@ tag's build left it) and the catalog built from main's head (--catalog). It
      first, so that the next run does not publish them again);
   4. uploads the files with immutable names (packages, icons) once, then the snapshot, then writes the pointer only if it
      still names the snapshot step 1 read (compare-and-swap); otherwise it discards its snapshot and starts again.
-Storage: `LocalStore`, a directory laid out as the bucket will be (ADR-0033 h: <channel>/<arch>/, snap/<id>/, pointer).
-The bucket's own backend waits for the host (ADR-0033 O8); its conditional write is NOT VERIFIED.
+Storage: `LocalStore`, a directory laid out as the bucket (ADR-0033 h: <channel>/<arch>/, snap/<id>/, pointer), for the
+tests; `S3Store`, the bucket itself through `aws s3api` (R2). The pointer's conditional write on R2 is NOT VERIFIED: the
+workflow's concurrency group serializes the runs and the pointer is read again just before its write.
 Exit codes: 0 published or nothing new, 1 refused (going backwards, a changed immutable file), 2 usage or environment,
 3 the pointer kept moving.
 """
 import argparse
 import contextlib
+import datetime
 import fcntl
 import hashlib
 import json
@@ -159,6 +162,136 @@ class LocalStore:
             os.fsync(f.fileno())
         os.chmod(tmp, 0o644)
         os.replace(tmp, path)
+
+
+NO_STORE = "no-store"
+IMMUTABLE = "public, max-age=31536000, immutable"  # the same headers as edge/worker.js (ADR-0033 h.5)
+
+
+class S3Store:
+    """The bucket itself (Cloudflare R2, S3 API), through the `aws` command line: same layout and same methods as
+    LocalStore. Credentials come from the environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY). Files are fetched into
+    a private work folder when a method needs them as paths. Headers on upload (ADR-0033 h.5): `no-store` on the pointer,
+    `public, max-age=31536000, immutable` on everything else this class writes (packages, signatures, icons, snapshots).
+    No locking: the one concurrency group of the workflow serializes the runs; the pointer is read again just before its
+    write (a conditional PutObject on R2 is NOT VERIFIED, so it is not used)."""
+
+    def __init__(self, bucket, endpoint, channel, arch, aws=("aws",)):
+        self.bucket, self.endpoint, self.channel, self.aws = bucket, endpoint, channel, tuple(aws)
+        self.prefix = f"{channel}/{arch}/"
+        self.work = tempfile.mkdtemp(prefix="publish-s3-")
+
+    def _run(self, *args, check=True):
+        cmd = [*self.aws, "--endpoint-url", self.endpoint, "s3api", *args, "--bucket", self.bucket]
+        out = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if check and out.returncode != 0:
+            raise RuntimeError(f"aws s3api {args[0]} failed: {out.stderr.strip()[:300]}")
+        return out
+
+    @staticmethod
+    def _missing(out):
+        return out.returncode != 0 and ("(404)" in out.stderr or "Not Found" in out.stderr or "NoSuchKey" in out.stderr)
+
+    def _head(self, key):
+        out = self._run("head-object", "--key", key, "--output", "json", check=False)
+        if out.returncode == 0:
+            return json.loads(out.stdout or "{}")
+        if self._missing(out):
+            return None
+        raise RuntimeError(f"aws s3api head-object {key} failed: {out.stderr.strip()[:300]}")
+
+    def _get(self, key, path):
+        """True when fetched, False when the key does not exist."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        out = self._run("get-object", "--key", key, path, check=False)
+        if out.returncode == 0:
+            return True
+        if self._missing(out):
+            return False
+        raise RuntimeError(f"aws s3api get-object {key} failed: {out.stderr.strip()[:300]}")
+
+    def _put(self, key, path, cache, sha=None):
+        args = ["put-object", "--key", key, "--body", path, "--cache-control", cache]
+        if key.endswith(".json") or key.endswith("/pointer"):
+            args += ["--content-type", "application/json"]
+        else:
+            args += ["--content-type", "application/octet-stream"]
+        if sha:
+            args += ["--metadata", f"sha256={sha}"]
+        self._run(*args, "--output", "json")
+
+    def _list(self, prefix):
+        """[(key, LastModified epoch)] under prefix."""
+        out = self._run("list-objects-v2", "--prefix", prefix, "--output", "json").stdout.strip()
+        data = json.loads(out) if out and out != "null" else None
+        return [(o["Key"], datetime.datetime.fromisoformat(o["LastModified"]).timestamp())
+                for o in (data or {}).get("Contents", [])]
+
+    @contextlib.contextmanager
+    def run_lock(self):
+        yield
+
+    def read_pointer(self):
+        path = os.path.join(self.work, "pointer")
+        if not self._get(self.prefix + "pointer", path):
+            return None, None
+        with open(path, "rb") as f:
+            raw = f.read()
+        os.unlink(path)
+        return json.loads(raw)["snapshot"], hashlib.sha256(raw).hexdigest()
+
+    def write_pointer_if(self, expected_tag, snapshot):
+        if self.read_pointer()[1] != expected_tag:
+            return False
+        path = os.path.join(self.work, "pointer.new")
+        with open(path, "wb") as f:
+            f.write(json.dumps({"snapshot": snapshot}).encode() + b"\n")
+        self._put(self.prefix + "pointer", path, NO_STORE)
+        os.unlink(path)
+        return True
+
+    def snapshot_path(self, snapshot, name):
+        path = os.path.join(self.work, "snap", snapshot, name)
+        if not os.path.exists(path) and not self._get(f"{self.prefix}snap/{snapshot}/{name}", path):
+            raise FileNotFoundError(f"{snapshot}/{name}")
+        return path
+
+    def manifest(self, snapshot):
+        with open(self.snapshot_path(snapshot, "manifest.json"), "rb") as f:
+            return json.loads(f.read())
+
+    def put_immutable(self, rel, source):
+        key, digest = self.prefix + rel, sha256_file(source)
+        head = self._head(key)
+        if head is not None:
+            stored = (head.get("Metadata") or {}).get("sha256")
+            if stored is None:  # not written by this class: compare the bytes
+                path = os.path.join(self.work, "compare")
+                self._get(key, path)
+                stored = sha256_file(path)
+                os.unlink(path)
+            if stored != digest:
+                raise Refused(f"{rel} is already published with other content (immutable names, ADR-0033 g)")
+            return digest
+        self._put(key, source, IMMUTABLE, digest)
+        return digest
+
+    def put_snapshot(self, snapshot, files):
+        """The files first, the manifest last: the snapshot is complete before anything points to it."""
+        for name, source in sorted(files.items(), key=lambda kv: kv[0] == "manifest.json"):
+            self._put(f"{self.prefix}snap/{snapshot}/{name}", source, IMMUTABLE)
+
+    def drop_snapshot(self, snapshot):
+        for key, _ in self._list(f"{self.prefix}snap/{snapshot}/"):
+            self._run("delete-object", "--key", key)
+        shutil.rmtree(os.path.join(self.work, "snap", snapshot), ignore_errors=True)
+
+    def snapshots(self):
+        found = {}
+        for key, mtime in self._list(self.prefix + "snap/"):
+            snap = key[len(self.prefix) + len("snap/"):].split("/", 1)[0]
+            found[snap] = min(mtime, found.get(snap, mtime))
+        return sorted(found.items())
 
 
 def newest_release(releases):
@@ -343,7 +476,9 @@ def prune(store, keep_days, now=None):
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="publish.py", description="the serialized publisher of a channel")
-    ap.add_argument("--store", required=True, help="the local store (the bucket's backend waits for the host)")
+    ap.add_argument("--store", help="a local store (tests, build trees)")
+    ap.add_argument("--s3-bucket", help="the bucket (credentials in AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)")
+    ap.add_argument("--s3-endpoint", help="the bucket's S3 endpoint (https://<account>.r2.cloudflarestorage.com)")
     ap.add_argument("--channel", required=True, choices=("stable", "beta"))
     ap.add_argument("--arch", default="x86_64", choices=("x86_64",))
     ap.add_argument("--releases", help="one folder per built version: grassfield.db, .files, the notes, packages, .sig")
@@ -364,7 +499,16 @@ def main(argv):
     if args.rollback_to and (args.releases or args.catalog):
         print("publish: --rollback-to publishes an older snapshot again, nothing else", file=sys.stderr)
         return 2
-    store = LocalStore(args.store, args.channel, args.arch)
+    if bool(args.store) == bool(args.s3_bucket) or bool(args.s3_bucket) != bool(args.s3_endpoint):
+        print("publish: give --store, or --s3-bucket with --s3-endpoint", file=sys.stderr)
+        return 2
+    if args.store:
+        store = LocalStore(args.store, args.channel, args.arch)
+    else:
+        if shutil.which("aws") is None:
+            print("publish: aws is missing (aws-cli-v2)", file=sys.stderr)
+            return 2
+        store = S3Store(args.s3_bucket, args.s3_endpoint, args.channel, args.arch)
     try:
         if args.rollback_to:
             rollback(store, args.rollback_to, keyring_dir=args.keyring_dir)

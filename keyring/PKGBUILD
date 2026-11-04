@@ -6,24 +6,25 @@
 # "Turn Off Grassfield Updates…" deleted them (ADR-0033 R2). Only `pacman-key --populate-from` that folder trusts them:
 # this package's install script while Grassfield updates are on, and grassfield-channel-helper's `set`.
 #
-# NO KEY UNTIL THE OWNER PROVIDES THE PROJECT'S SIGNING KEY (O11, O20): grassfield.gpg, grassfield-trusted and
-# grassfield-revoked are empty, so the package installs and trusts nothing (R1). Test keys are generated inside the
-# throwaway test containers at each run, never committed, never installed elsewhere. When the key exists: its public key
-# goes in grassfield.gpg, "<FINGERPRINT>:4:" in grassfield-trusted, pkgver becomes the date, and `updpkgsums`.
+# THE OWNER'S KEY (O11, O20; created 2026-11-03, fingerprint E4921A382C349308BAA50D2F44C31B5D862EBEFA): grassfield.gpg is
+# its public key (the binary OpenPGP packets, the dearmored export), grassfield-trusted holds "<FINGERPRINT>:4:"
+# (pacman's format: full trust) and grassfield-revoked is empty. Test keys are generated inside the throwaway test
+# containers at each run, never committed, never installed elsewhere. A new key: its public key goes in grassfield.gpg,
+# "<FINGERPRINT>:4:" in grassfield-trusted, pkgver becomes the date, and `updpkgsums`.
 # A rotation adds the new key while the old one still signs and moves the old one to grassfield-revoked only after the
 # overlap of ADR-0033 b.4. Any other change to the package, such as its install script, is a new pkgrel: a build reuses
 # the keyring package of this version only if it is still this folder's, the whole package (scripts/keyring-check.sh).
 pkgname=grassfield-keyring
-pkgver=20261027
-pkgrel=2
-pkgdesc="Grassfield's package signing keys for pacman (none until the project's signing key exists)"
+pkgver=20261104
+pkgrel=1
+pkgdesc="Grassfield's package signing keys for pacman"
 arch=(any)
 url="https://grassfield.invalid"
 license=(MIT)
 install=grassfield-keyring.install
 source=(grassfield.gpg grassfield-trusted grassfield-revoked)
-sha256sums=('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+sha256sums=('21b1687ede2131f4e1092502a739511e3421f0252deb2333dcadabc7dffc815f'
+            '8648c99b9607219b0f39214be898f4b8a1d3757a29ab20cf1315151372f69ae7'
             'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
 options=(!debug !strip)
 
