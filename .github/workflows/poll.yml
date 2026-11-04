@@ -1,15 +1,27 @@
-# Builds every new grassfield tag once (owner decision O14: a poll of the tags every 15 minutes, plus manual runs of the
-# build workflow). OFF until the owner sets the repository variable GRASSFIELD_TAG_POLL to "on", once the secret
-# GRASSFIELD_DEPLOY_KEY exists (O13): a job skipped by its `if` starts no runner. GitHub may start scheduled runs late.
-# A tag is built once: one whose "build <tag>" run exists (whatever its result) is not started again; rerun it by hand.
+# Builds every new grassfield tag once (owner decision O14: a poll of the tags, plus manual runs of the build workflow).
+# OFF until the owner sets the repository variable GRASSFIELD_TAG_POLL to "on", once the secret GRASSFIELD_DEPLOY_KEY exists
+# (O13): a job skipped by its `if` starts no runner. GitHub may start scheduled runs late (minutes, more at busy hours, and
+# it stops scheduled runs of a repository with no activity for 60 days: a push or a manual run restarts them).
+# A tag is started only when it is new in both senses (docs/build-caches.md, "Starting a build on a tag"):
+#   - no "build <tag>" run exists (whatever its result: a failed build is rerun by hand), and
+#   - the public beta channel does not list it already (a tag's release goes to beta in every case, ADR-0033 e): the build
+#     workflow's release job stops at "stored already" only after the owner approved its environment, so a tag that is
+#     stored must not ask for that approval. The channel's signed notes list the releases (version "1.0.0rc3-1" for
+#     v1.0.0-rc3).
+# At most 3 builds are started per poll. The poll starts the build workflow on main, nothing more: the release and the
+# publication still wait for the owner's approval of the publish-stable and publish-beta environments. It holds no key and
+# no bucket credential; the deploy key only lists the tags.
 name: poll grassfield tags
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
 permissions:
   actions: write
   contents: read
+concurrency:
+  group: poll-grassfield-tags
+  cancel-in-progress: false
 jobs:
   poll:
     if: vars.GRASSFIELD_TAG_POLL == 'on'
@@ -21,6 +33,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.GRASSFIELD_DEPLOY_KEY }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PACKAGES_URL: https://packages.grassfield.site
         run: |
           set -euo pipefail
           [ -n "$DEPLOY_KEY" ] || { echo "::error::GRASSFIELD_DEPLOY_KEY is not set"; exit 1; }
@@ -30,10 +43,24 @@ jobs:
           eval "$(ssh-agent -s)"
           printf '%s\n' "$DEPLOY_KEY" | ssh-add -
           tags=$(git ls-remote --tags --refs git@github.com:grassfieldhq/grassfield.git | awk '{ sub("refs/tags/", "", $2); print $2 }' |
-            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?$' || true)
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?$' | sort -V || true)
           built=$(gh run list --workflow build.yml --limit 1000 --json displayTitle -q '.[].displayTitle')
+          # The releases the beta channel lists (public, signed; clients check it, this only reads it). 404: nothing is
+          # published yet. Any other failure stops the poll: a later poll retries, none starts a build it cannot tell is new.
+          code=$(curl -sS -L --max-time 60 -o notes.json -w '%{http_code}' "$PACKAGES_URL/beta/x86_64/grassfield-notes.json") ||
+            { echo "::error::cannot reach $PACKAGES_URL"; exit 1; }
+          case $code in
+            200) listed=$(jq -r '.releases[].version' notes.json) ;;
+            404) listed="" ;;
+            *) echo "::error::$PACKAGES_URL/beta/x86_64/grassfield-notes.json answered $code"; exit 1 ;;
+          esac
+          started=0
           for t in $tags; do
             grep -qxF "build $t" <<<"$built" && continue
+            v=${t#v}; v=${v//-/}      # v1.0.0-rc3 -> 1.0.0rc3, the pkgver (a pkgrel follows: 1.0.0rc3-1)
+            if grep -Eq "^${v//./\\.}-[0-9]+\$" <<<"$listed"; then echo "$t: listed by the beta channel already"; continue; fi
+            ((started < 3)) || { echo "$t: left for the next poll (3 started)"; continue; }
             echo "new tag $t: starting its build"
             gh workflow run build.yml -f ref="$t"
+            started=$((started + 1))
           done
