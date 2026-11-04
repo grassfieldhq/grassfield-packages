@@ -1,7 +1,7 @@
 # First publication, step by step
 
 Owner decision of 2026-11-04: the repository goes live at https://packages.grassfield.site now, unannounced. The legal review
-stays mandatory before any announcement. Nothing below is run by an agent. The first publication is **tag `v1.0.0-rc2`, beta
+stays mandatory before any announcement. Each step names who runs it. The first publication is **tag `v1.0.0-rc2`, beta
 only** (O15): stable stays empty until after the legal review. Steps 3 to 6 are run by the integrator under the owner's
 delegation of 2026-11-04, which covers the tag, the approvals and the Worker deploy once the reviews pass; the owner remains
 the required reviewer in GitHub.
@@ -31,7 +31,7 @@ release build and stops with "this tag does not go to ...": approve or reject it
    channel: with no release built yet it ends at "nothing to publish". Approving or rejecting is harmless. Done: the first
    run after the merge (run 41755056292) ended at "nothing to publish" on both channels, with the S3 credentials working.
 2. **Owner (or integrator)**: deploy the Worker (**VERIFIED**: the integrator deployed it on 2026-11-04, version `b5e62229`,
-   wrangler 4.150.0, six routes),  from this repository's `edge/`, with a Cloudflare account that owns the zone
+   wrangler 4.150.0, six routes), from this repository's `edge/`, with a Cloudflare account that owns the zone
    `grassfield.site` and the bucket `grassfield` (a token with Workers Scripts: Edit and Workers Routes: Edit, or
    `wrangler login`; nothing of it goes to GitHub):
 
