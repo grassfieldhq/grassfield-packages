@@ -43,6 +43,24 @@ def make_db(path, packages):
             tar.addfile(info, io.BytesIO(data))
 
 
+class LocalStoreModes(unittest.TestCase):
+    """build.yml run 41790981731: the container wrote a snapshot as root with mkdtemp's 0700, and upload-artifact (the
+    runner's user) could not read it back (EACCES on out/tree/beta/x86_64/snap/<id>)."""
+
+    def test_a_snapshot_directory_is_readable_by_everyone(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            store = publish.LocalStore(os.path.join(tmp, "bucket"), "beta", "x86_64")
+            source = os.path.join(tmp, "grassfield.db")
+            with open(source, "wb") as f:
+                f.write(b"db")
+            snapshot = "20261104T073752Z-0f56f8ba941b"
+            store.put_snapshot(snapshot, {"grassfield.db": source})
+            self.assertEqual(os.stat(os.path.join(store.base, "snap", snapshot)).st_mode & 0o777, 0o755)
+        finally:
+            shutil.rmtree(tmp)
+
+
 @unittest.skipUnless(HAVE_TOOLS, "needs vercmp, bsdtar and GnuPG in the test container (tests/run-in-container.sh)")
 class Publisher(unittest.TestCase):
     @classmethod
