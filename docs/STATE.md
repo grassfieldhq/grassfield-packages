@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-10-31
+Last updated: 2026-11-05
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -385,6 +385,32 @@ Last updated: 2026-10-31
     0.3.2.r7.g2b4501a-1 from [omarchy].
   - Next: the integrator's merge.
 
+- 2026-11-04/05 (integrator): first publication and build speed.
+  - Live at packages.grassfield.site, unannounced (owner decision of 2026-11-04). Beta snapshots:
+    - 20261104T230435Z-1982baefa907: 1.0.0rc2-1;
+    - 20261104T234957Z-cd39bd000509: 1.0.0rc3-1 and grassfield-keyring 20261104-1.
+    Database and packages verified with gpgv against the owner's key (E4921A382C349308BAA50D2F44C31B5D862EBEFA): Good
+    signature. Immutable package headers. stable answers 404 (no release; the stable job skips: "nothing to publish").
+  - #17 (fbacfe07): publish.py makes the snapshot folder 0755 (mkdtemp's 0700 broke the upload), test `LocalStoreModes`.
+  - #18 (96be0c93, opus security PASS):
+    - timings in every build summary;
+    - ccache and pacman caches for branch builds only; no cache of any kind in a run that can reach the release job
+      (`USE_CACHE`, guarded by tests/test_workflows.py, which fails in CI without PyYAML);
+    - zstd -T0 -3 written down;
+    - the tag poll every 10 minutes behind `GRASSFIELD_TAG_POLL`, set to `on` 2026-11-05 01:02Z.
+    Measured branch builds of v1.0.0-rc3: 24 min 48 s cold (41936088220), 17 min 45 s warm (41939837100). Release
+    builds stay about 25-27 min by design.
+  - #19 (25102076, opus security PASS):
+    - the artifact holds regular files only (upload-artifact follows links);
+    - a release-capable build takes only a tag whose commit is HEAD and on grassfield's main;
+    - stronger guard tests with mutations.
+    Dev run 41946828738: build and test success with the new upload folder. The ancestry step has not run in CI yet (branch
+    runs skip it): check its log on the first tag build of main.
+  - The poll: a manual run (41948705401) succeeded and started nothing (rc2 and rc3 built and listed). GitHub's scheduler
+    throttles this repository: with the old `*/15` cron, scheduled runs came every 4-8 hours, and none came in the 45
+    minutes after the variable was set. The integrator starts the build right after tagging; the poll is the fallback.
+    An immediate start needs a token secret in grassfield and a tag workflow there (owner step, optional).
+
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
   OK; release-build.sh 36/0; install-repro (main deletes one of two keys, this branch both); guard.sh 6/0 (4b7aa31
@@ -413,12 +439,10 @@ Last updated: 2026-10-31
 - Store step 0: none (docs only).
 
 ## Open
-- From the owner, later: `GRASSFIELD_DEPLOY_KEY`, then `GRASSFIELD_TAG_POLL=on`; the publisher's environments
-  `publish-stable` and `publish-beta` and their secrets (signing key and passphrase, S3 keys) and variables (bucket,
-  endpoint), created and protected before `if: false` is removed (below); the public key and fingerprint; the host, and
-  with it the bucket's backend of `tools/publish.py`.
-- The workflows have never run on GitHub (they need the deploy key); their steps ran locally only through the scripts.
-- Pruning of old snapshots (7 days, `tools/publish.py`) and of packages no snapshot names: with hosting, after M5.
+- Pruning of old snapshots (7 days, `tools/publish.py`) and of packages no snapshot names.
+- The guard test's known limits (code review is the control): an obfuscated GITHUB_ENV write, a docker `--cache-from`,
+  `rsync --copy-links`, a self-ancestry check.
+- The tag poll's real latency depends on GitHub's scheduler (hours here); see the 2026-11-04/05 entry.
 
 ## Open questions (owner)
 - None for the catalog. The owner's decisions of 2026-10-27 (legal review with the integrator, recorded on grassfield PR
@@ -430,10 +454,11 @@ Last updated: 2026-10-31
   - the app name "Grassfield Store" and "Get" / "Open" stay, with the macOS command labels.
   Publication still waits for the owner's decision after the M5 legal review (CLAUDE.md).
 
-## Owner steps before publishing is enabled
-- Create the `publish-stable` and `publish-beta` environments with required reviewers (the owner approves each run) and
-  deployments from `main` only, then add the channel's key and storage credentials there (ADR-0033 b.7). GitHub creates a
-  missing environment unprotected when a job that names it runs, so this comes before `if: false` is removed.
+## Owner steps
+- Done (2026-11-04): the deploy key, the protected `publish-stable` and `publish-beta` environments (required reviewer,
+  main only) with the signing key and storage secrets, the Worker and its routes. The integrator may tag, approve the
+  publish runs and deploy the Worker after the reviews pass (owner delegation of 2026-11-04); announcing stays the owner's.
+- Optional: a token secret in grassfield for an immediate build on a tag.
 
 ## Next
 - The integrator's review of step 3c part 3's half (this branch's PR, Get Flatpak's command pinned), with grassfield's
