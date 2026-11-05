@@ -55,6 +55,23 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           path: grassfield
+      # The guard of the tag poll (poll.yml builds any v* tag of the repository): a run that can reach the release job builds
+      # only a commit that is on grassfield's main. fetch-depth 0 above brought every branch and the whole history, so
+      # origin/main is complete; the run fails here, before anything is built or signed, if the tag's commit is not its
+      # ancestor (or if the history is shallow, which would make the answer meaningless).
+      - name: The tag is on grassfield's main (a run that can reach the release job)
+        if: github.ref == 'refs/heads/main' && startsWith(inputs.ref, 'v')
+        run: |
+          set -euo pipefail
+          cd grassfield
+          [ "$(git rev-parse --is-shallow-repository)" = false ] || { echo "::error::grassfield's history is shallow"; exit 1; }
+          git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null || { echo "::error::grassfield's main was not fetched"; exit 1; }
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::$(git rev-parse HEAD) (input $INPUT_REF) is not on grassfield's main: refused"
+            exit 1
+          fi
+        env:
+          INPUT_REF: ${{ inputs.ref }}
       # Caches (docs/build-caches.md): for a build from a branch other than main, never otherwise. A cache entry is unpacked
       # by actions/cache with tar -P into the runner's workspace and can write anywhere there (absolute paths included),
       # where nothing checks it: a run that can reach the release job (anything of main, so every `v*` build) must not
@@ -172,11 +189,29 @@ jobs:
         with:
           path: cache/data
           key: data-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('grassfield/packaging/arch/icon*', 'grassfield/packaging/arch/wallpaper*', 'grassfield/branding/icons/theme/**', 'grassfield/branding/cursors/**', 'grassfield/packaging/plymouth/**', 'grassfield/apps/wallpaper-tool/**') }}
+      # upload-artifact follows symlinks, and the build container wrote out/: a link there would put a file of this runner into
+      # the (public) artifact. Only regular files are copied to the upload folder, never followed; any link or other
+      # non-regular entry fails the job (the regular files are still uploaded, for the diagnosis).
+      - name: Only regular files go to the artifact
+        id: upload-folder
+        if: always()
+        run: |
+          set -euo pipefail
+          up=$RUNNER_TEMP/upload; rm -rf "$up"; mkdir -p "$up"
+          if [ -d out ] && [ ! -L out ]; then
+            bad=$(find out -mindepth 1 ! -type f ! -type d -print)
+            (cd out && find . -type f -print0 | tar --null --files-from=- -cf -) | tar -C "$up" -xf -
+            if [ -n "$bad" ]; then
+              echo "::error::out/ holds entries that are not regular files or folders (symlink, device, socket...): not uploaded"
+              printf '%s\n' "$bad" | head -n 20
+              exit 1
+            fi
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: grassfield-channel-${{ github.run_id }}
-          path: out
+          path: ${{ runner.temp }}/upload
           retention-days: 14
 
   test:
