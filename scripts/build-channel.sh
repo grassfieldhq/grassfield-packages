@@ -42,6 +42,19 @@
 # channel's earlier releases from the ref's own tags (notes.py --history). grassfield-keyring is built once per version:
 # every release's database names it and a package file name never changes content, so one already in the tree is used
 # again with its signature (the published one, once publishing is enabled).
+#
+# Optional speed-ups, all off unless the caller mounts and names a folder (docs/build-caches.md has the security reasoning):
+#   GRASSFIELD_CCACHE_DIR   ccache for every C/C++ compile of makepkg (the compiler wrappers first in makepkg's PATH); its
+#                           statistics go to the build statistics. The hash of the preprocessed source, the compiler and the
+#                           flags names an entry: an entry is only as trustworthy as whoever could write the folder.
+#   GRASSFIELD_DATA_CACHE   a folder the PKGBUILD may keep expensive pure products in (composed icons, shrunk photographs),
+#                           each under the hash of all its inputs; a PKGBUILD that does not know it ignores it.
+#   GRASSFIELD_PACMAN_CACHE_PRUNE
+#                           non-empty: after the build, `pacman -Sc` drops the cached packages that are not installed, so the
+#                           cache folder the caller saves is this build's package set. pacman verifies every cached package
+#                           (database checksum, signature) at each install: the cache is not trusted.
+# Always: the build statistics in /build/stats (step times, a process sample every 5 s, ccache, and the makepkg log is
+# time-stamped) for the CI job summary (scripts/build-summary.sh). They hold no secret: names, times and counters.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -54,7 +67,10 @@ die() {
   echo "build-channel.sh: $*" >&2
   exit 1
 }
-step() { printf '\n== %s\n' "$*"; }
+step() { printf '\n== %s\n' "$*"; printf '%s\t%s\n' "$SECONDS" "$*" >>/build/stats/steps.tsv; }
+stamp() { local l; while IFS= read -r l; do printf '[+%ss] %s\n' "$SECONDS" "$l"; done; }
+# A process sample every 5 s (the names of what runs): where the wall clock goes, tool by tool (scripts/build-summary.sh).
+sample() { while :; do printf '%s %s\n' "$SECONDS" "$(ps -e -o comm= | sort -u | tr '\n' ' ')"; sleep 5; done; }
 
 while (($#)); do
   [[ $# -ge 2 ]] || usage
@@ -76,9 +92,14 @@ done
   { echo "build-channel.sh: refused: the project's key never meets a build; sign the tested release build with sign-release.sh" >&2; exit 2; }
 [[ -z $pkgrel || $pkgrel =~ ^[1-9][0-9]*$ ]] || die "--pkgrel must be a positive integer"
 [[ $key =~ ^[0-9A-F]{40}$ ]] || die "--key must be a full fingerprint (40 upper-case hex digits)"
-mkdir -p /build "$tree"
+mkdir -p /build "$tree" /build/stats
 log=/build/build.log
 : >"$log"
+: >/build/stats/steps.tsv
+ccache_dir=${GRASSFIELD_CCACHE_DIR:-} data_cache=${GRASSFIELD_DATA_CACHE:-}
+sample >/build/stats/profile.txt 2>/dev/null &
+sampler=$!
+trap 'kill "$sampler" 2>/dev/null || true; printf "%s\tend\n" "$SECONDS" >>/build/stats/steps.tsv' EXIT
 
 sign() { # file -> file.sig, detached and binary, by the throwaway key
   gpg --homedir "$gnupghome" --batch --no-tty --pinentry-mode loopback --passphrase '' --local-user "$key!" --detach-sign \
@@ -95,8 +116,15 @@ install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 # order under --noconfirm): qt6-webengine's ttf-font would be [omarchy]'s 152 MB maplemono-nf-cn. A font of [extra] is
 # installed first; mesa is opengl-driver's provider because every depends array names it first. Which packages came from
 # [omarchy] is printed after makepkg.
-pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu >>"$log" 2>&1 ||
-  die "pacman -Syu base-devel git diffutils ttf-dejavu (see $log)"
+base_set=(base-devel git diffutils ttf-dejavu)
+[[ -z $ccache_dir ]] || base_set+=(ccache)
+pacman -Syu --noconfirm --needed "${base_set[@]}" >>"$log" 2>&1 ||
+  die "pacman -Syu ${base_set[*]} (see $log)"
+# Compression: makepkg's own default, written down so a change of Arch's default is a change here. All cores (-T0), level 3:
+# the images and archives in the data packages are compressed already, level 19 saved 0.2% on the wallpapers for 100x the
+# time (docs/build-caches.md). An explicit level never changes a package's meaning, only its bytes.
+mkdir -p /etc/makepkg.conf.d
+printf 'COMPRESSZST=(zstd -c -T0 -3 -)\n' >/etc/makepkg.conf.d/grassfield.conf
 id -u builder >/dev/null 2>&1 || useradd -m builder
 printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman\n' >/etc/sudoers.d/90-builder
 chmod 440 /etc/sudoers.d/90-builder
@@ -167,8 +195,34 @@ mkdir -p /build/srcdest /build/pkgs
 chown -R builder: /build/src /build/srcdest /build/pkgs
 env_args=(SRCDEST=/build/srcdest PKGDEST=/build/pkgs)
 [[ -n $pkgrel ]] && env_args+=(GRASSFIELD_PKGREL="$pkgrel")
-(cd /build/src/packaging/arch && runuser -u builder -- env "${env_args[@]}" makepkg -s --noconfirm --needed >>"$log" 2>&1) ||
+if [[ -n $ccache_dir ]]; then
+  # The wrappers first in PATH, as makepkg's own `ccache` BUILDENV does; cmake finds c++ and cc there. Content hash of the
+  # compiler, not its mtime; the base directory makes the entries independent of where the tree sits.
+  mkdir -p "$ccache_dir" && chmod -R a+rwX "$ccache_dir"
+  env_args+=(PATH="/usr/lib/ccache/bin:$PATH" CCACHE_DIR="$ccache_dir" CCACHE_MAXSIZE=2G CCACHE_COMPILERCHECK=content CCACHE_BASEDIR=/build)
+  runuser -u builder -- env "${env_args[@]}" ccache -z >>"$log" 2>&1 || die "ccache -z (see $log)"
+  echo "ccache: on, folder $ccache_dir"
+else
+  echo "ccache: off"
+fi
+if [[ -n $data_cache ]]; then
+  mkdir -p "$data_cache" && chmod -R a+rwX "$data_cache"
+  env_args+=(GRASSFIELD_DATA_CACHE="$data_cache")
+fi
+(cd /build/src/packaging/arch && runuser -u builder -- env "${env_args[@]}" makepkg -s --noconfirm --needed 2>&1 | stamp >>"$log") ||
   { tail -n 30 "$log"; die "makepkg failed (see $log)"; }
+if [[ -n $ccache_dir ]]; then
+  # hits = direct + preprocessed; the rate is over the cacheable calls that were answered or compiled.
+  runuser -u builder -- env "${env_args[@]}" ccache --print-stats >/build/stats/ccache.raw 2>/dev/null || true
+  runuser -u builder -- env "${env_args[@]}" ccache -s >/build/stats/ccache.txt 2>&1 || true
+  chmod -R a+rwX "$ccache_dir"
+fi
+[[ -z $data_cache ]] || chmod -R a+rwX "$data_cache"
+if [[ -n ${GRASSFIELD_PACMAN_CACHE_PRUNE:-} ]]; then
+  pacman -Sc --noconfirm >>"$log" 2>&1 || echo "pacman -Sc failed: the cache keeps older packages"
+  find /var/cache/pacman/pkg \( -name 'download-*' -o -name '*.part' \) -prune -exec rm -r -- {} + 2>/dev/null || true
+  chmod -R a+rX /var/cache/pacman/pkg
+fi
 mapfile -t built < <(ls /build/pkgs/*.pkg.tar.zst)
 for f in "${built[@]}" "$keyring_pkg"; do
   info=$(bsdtar -xOf "$f" .PKGINFO)
