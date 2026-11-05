@@ -6,6 +6,7 @@ The one switch is the job env USE_CACHE of build.yml; every step that uses actio
 other workflow may use a cache at all (docs/build-caches.md).
 """
 
+import os
 import pathlib
 import re
 import unittest
@@ -40,8 +41,15 @@ def caches_something(step):
     return uses.startswith("actions/cache") or "cache" in with_ or "cache-dependency-path" in with_
 
 
-@unittest.skipIf(yaml is None, "PyYAML is not installed")
 class CacheNeverReachesARelease(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # In CI a missing PyYAML must not silently disable the guard: it fails. Locally it skips.
+        if yaml is None:
+            if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+                raise AssertionError("PyYAML is missing in CI: the cache guard did not run (install python-yaml)")
+            raise unittest.SkipTest("PyYAML is not installed")
+
     def test_the_switch(self):
         build = load(WORKFLOWS / "build.yml")["jobs"]["build"]
         self.assertEqual(build["env"]["USE_CACHE"], SWITCH)
