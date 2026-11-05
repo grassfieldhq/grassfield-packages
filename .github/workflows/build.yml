@@ -66,6 +66,9 @@ jobs:
           cd grassfield
           [ "$(git rev-parse --is-shallow-repository)" = false ] || { echo "::error::grassfield's history is shallow"; exit 1; }
           git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null || { echo "::error::grassfield's main was not fetched"; exit 1; }
+          # The commit checked out (and built: build-channel.sh resolves the same name) must be the tag's, not a branch of that name.
+          tag=$(git rev-parse --verify --quiet "refs/tags/$INPUT_REF^{commit}") || { echo "::error::$INPUT_REF is not a tag of grassfield: refused"; exit 1; }
+          [ "$tag" = "$(git rev-parse HEAD)" ] || { echo "::error::the checkout is not the commit of the tag $INPUT_REF: refused"; exit 1; }
           if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
             echo "::error::$(git rev-parse HEAD) (input $INPUT_REF) is not on grassfield's main: refused"
             exit 1
@@ -198,7 +201,8 @@ jobs:
         run: |
           set -euo pipefail
           up=$RUNNER_TEMP/upload; rm -rf "$up"; mkdir -p "$up"
-          if [ -d out ] && [ ! -L out ]; then
+          if [ -L out ]; then echo "::error::out is a link: not uploaded"; exit 1; fi
+          if [ -d out ]; then
             bad=$(find out -mindepth 1 ! -type f ! -type d -print)
             (cd out && find . -type f -print0 | tar --null --files-from=- -cf -) | tar -C "$up" -xf -
             if [ -n "$bad" ]; then

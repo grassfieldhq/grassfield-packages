@@ -27,6 +27,7 @@ WORKFLOWS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workfl
 SWITCH = "${{ github.ref != 'refs/heads/main' && startsWith(github.ref, 'refs/heads/') }}"
 GATE = "env.USE_CACHE == 'true'"
 RELEASE_IF = "github.ref == 'refs/heads/main' && startsWith(inputs.ref, 'v')"
+INPUT = "${{ inputs.ref }}"
 # Actions that cache without "cache" in their name, or by an input.
 KNOWN_CACHING_ACTIONS = (
     "gradle/actions/setup-gradle", "gradle/gradle-build-action", "docker/build-push-action", "docker/bake-action",
@@ -193,6 +194,8 @@ def artifact_problems(doc):
         out.append("the folder step does not copy regular files only")
     if not re.search(r"if \[ -n \"\$bad\" \]; then.*?exit 1", run, re.S):
         out.append("the folder step does not fail on a non-regular entry")
+    if not re.search(r"if \[ -L out \]; then[^\n]*exit 1", run):
+        out.append("the folder step does not fail when out itself is a link")
     if re.search(r"\b(find|cp|rsync)\b[^\n|]*\s-[a-zA-Z]*[LH]\b|\btar\b[^\n|]*\s-[a-zA-Z]*h\b|--dereference|-follow", run):
         out.append("the folder step follows links")
     if cond != "always()" or prep[0].get("continue-on-error"):
@@ -225,6 +228,32 @@ def tag_problems(doc):
         out.append("the ancestry check does not refuse a shallow history")
     if (steps[checkout[0]].get("with") or {}).get("fetch-depth") != 0:
         out.append("the grassfield checkout is not a full fetch")
+    # What is checked is what is built: the checkout, the check and the build all take the dispatch input, and the check
+    # requires the checkout to be the tag's commit (a branch of the same name is checked out first).
+    if (steps[checkout[0]].get("with") or {}).get("ref") != INPUT:
+        out.append("the grassfield checkout does not take the dispatch input")
+    if (g.get("env") or {}).get("INPUT_REF") != INPUT:
+        out.append("the ancestry check does not read the dispatch input")
+    if not re.search(r'refs/tags/\$INPUT_REF\^\{commit\}', run) or 'git rev-parse HEAD' not in run:
+        out.append("the ancestry check does not require the checkout to be the tag's commit")
+    build = steps[docker[0]]
+    if (build.get("env") or {}).get("REF") != INPUT or '--ref "$REF"' not in str(build.get("run", "")):
+        out.append("the build step does not build the dispatch input")
+    return out
+
+
+def action_problems(docs):
+    """No local or container action anywhere, and the build workflow downloads only artifacts of its own run."""
+    out = []
+    for name, doc in docs.items():
+        for job, _, s in steps_of(doc):
+            uses = str(s.get("uses", ""))
+            if uses.startswith("./") or uses.startswith("docker://"):
+                out.append(f"{name} {job}: a local or container action ({uses})")
+            w = s.get("with") or {}
+            if name == "build.yml" and uses.startswith("actions/download-artifact") and \
+                    ("run-id" in w or "github-token" in w or "repository" in w):
+                out.append(f"build.yml {job}: a download from another run or repository")
     return out
 
 
@@ -296,6 +325,9 @@ class TheRealWorkflows(Guards):
 
     def test_a_tag_must_be_on_main(self):
         self.assertEqual(tag_problems(self.docs["build.yml"]), [])
+
+    def test_no_local_action_and_no_download_from_another_run(self):
+        self.assertEqual(action_problems(self.docs), [])
 
     def test_every_action_is_pinned_by_sha(self):
         for path in sorted(WORKFLOWS.glob("*.yml")):
@@ -456,6 +488,44 @@ class MutationsAreCaught(Guards):
                 if (s.get("with") or {}).get("repository") == "grassfieldhq/grassfield":
                     s["with"]["fetch-depth"] = 1
         self.caught(tag_problems, mutated(shallow), "build.yml")
+
+        def checkout_main(d):
+            for s in steps(d):
+                if (s.get("with") or {}).get("repository") == "grassfieldhq/grassfield":
+                    s["with"]["ref"] = "main"
+        self.caught(tag_problems, mutated(checkout_main), "build.yml")
+
+        def build_other(d):
+            for s in steps(d):
+                if "docker run" in str(s.get("run", "")):
+                    s["env"]["REF"] = "${{ inputs.ref }}-evil"
+        self.caught(tag_problems, mutated(build_other), "build.yml")
+
+        def any_commit(d):
+            g = find(d)
+            g["run"] = "\n".join(l for l in g["run"].split("\n") if "refs/tags/" not in l and '"$tag"' not in l)
+        self.caught(tag_problems, mutated(any_commit), "build.yml")
+
+    def test_out_itself_a_link_is_refused(self):
+        def gone(d):
+            for s in d["build.yml"]["jobs"]["build"]["steps"]:
+                if s.get("id") == "upload-folder":
+                    s["run"] = "\n".join(l for l in s["run"].split("\n") if "-L out" not in l)
+        self.caught(artifact_problems, mutated(gone), "build.yml")
+
+    def test_a_local_action_or_a_download_from_another_run(self):
+        def local(d):
+            d["build.yml"]["jobs"]["build"]["steps"].insert(0, {"uses": "./.github/actions/x"})
+        self.caught(action_problems, mutated(local))
+
+        def container(d):
+            d["poll.yml"]["jobs"][next(iter(d["poll.yml"]["jobs"]))]["steps"].insert(0, {"uses": "docker://alpine:3"})
+        self.caught(action_problems, mutated(container))
+
+        def other_run(d):
+            d["build.yml"]["jobs"]["build"]["steps"].insert(0, {"uses": "actions/download-artifact@" + "0" * 40,
+                                                                "with": {"name": "x", "run-id": "1", "github-token": "t"}})
+        self.caught(action_problems, mutated(other_run))
 
 
 if __name__ == "__main__":
