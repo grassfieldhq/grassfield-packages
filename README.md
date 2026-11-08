@@ -49,7 +49,7 @@ catalog of Grassfield Store.
 | `.github/workflows/publish.yml` | the publishing job, one per channel, serialized, written and disabled (`if: false`, no secret): on a push to `main` or when a build completes, it publishes the latest state |
 | `edge/` | the Cloudflare Worker of `packages.grassfield.site` (ADR-0033 h.5): the fixed names answer the same 302 as `scripts/serve.py` from `<channel>/x86_64/pointer`, everything else is the bucket's object with the cache headers of h.5; `worker.test.mjs` checks it against `serve.py`; deployed by hand (`docs/first-run.md`) |
 | `docs/first-run.md` | the first publication, step by step |
-| `.github/workflows/poll.yml`, `watch-hyprland.yml` | the tag poll (every 15 minutes, off until the owner turns it on); the Hyprland watch (by hand until something is published) |
+| `.github/workflows/poll.yml`, `watch-hyprland.yml` | the tag poll (every 15 minutes, off until the owner turns it on); the toolkit watch, daily (ADR-0033 f, ADR-0041 step 2a): compares the published build's Hyprland ABI stamp, quickshell and qt6-base with Omarchy's stable and rc channels, starts a pkgrel rebuild when stable moved (publication still waits for approval) and opens an issue when only rc moved |
 
 ## Status
 Going live, unannounced, by the owner's decision of 2026-11-04: the repository is public and its packages are served at

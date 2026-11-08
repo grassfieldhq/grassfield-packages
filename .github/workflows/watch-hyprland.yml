@@ -1,33 +1,82 @@
-# ADR-0033 f: when Omarchy moves Hyprland, the plugin of the published channel no longer matches (ADR-0009 degraded mode
-# meanwhile). This compares the Hyprland of Omarchy's stable and rc mirrors with the one a channel was built for (the
-# "hyprland" line of its build-*.txt) and says whether a rebuild with pkgrel + 1 is due (build workflow, then
-# build-channel.sh --pkgrel). DISABLED while nothing is published: no schedule and no published channel to read; it runs
-# only by hand. Once publishing starts, a schedule and the read of the published build-*.txt are added here.
+# The daily toolkit watch (grassfield ADR-0033 f, ADR-0041 step 2a / SQ-3 option A, owner decision of 2026-11-08). Omarchy moves
+# Hyprland, Quickshell and Qt on its own schedule; the published Grassfield was built for the versions of one day. Two things
+# break when they drift apart: the plugin (a Hyprland whose ABI stamp changed: ADR-0009 degraded mode until a rebuild) and the
+# update hold (grassfield-hold bounds quickshell at its version and qt6-base at its major.minor, so pacman refuses every system
+# update that moves them until a Grassfield built for the new toolkit is published). The hold is only as good as this job: a
+# rebuild that never starts refuses every system update with no end (the rc7 audit, R7-INS-01 and R7-INS-02).
+#
+# What it does, once a day and by hand (tools/watch_toolkit.py; tests/test_watch_toolkit.py):
+#   1. reads the PUBLISHED channel's build record from packages.grassfield.site: grassfield.db, then the BUILD-DEPS of the listed
+#      grassfield-desktop and the ABI stamp of the listed grassfield-compositor, each package checked against the database's
+#      SHA-256 (the build-<id>.txt of build-channel.sh is a CI artifact and is not published; these are the files clients read);
+#   2. compares them with Omarchy's stable AND rc channels: quickshell from [omarchy] (pkgs.omarchy.org/<channel>), qt6-base and
+#      Hyprland from the channel's dated mirror; Hyprland by its ABI stamp (version.h of the package, the formula of
+#      compositor/abi-stamp.cmake), not by its version string: a pkgrel bump with the same stamp needs no rebuild;
+#   3. when Omarchy's STABLE channel differs from the build: starts build.yml for the published ref with pkgrel + 1 (the release
+#      job and the publication still wait for the owner's approval of publish-stable and publish-beta), unless a build of that
+#      ref and pkgrel was started already (its run title);
+#   4. when only RC differs (build.yml builds against stable's mirrors and has no rc variant), or the published plugin has no
+#      stamp: opens one issue, "Toolkit watch: a decision is needed", unless one is open;
+#   5. fails loudly (the run goes red, GitHub mails the owner) when a mirror or the channel cannot be read or does not check out.
+# No secret is used: the token below is the job's own, read-only except for starting a workflow and opening an issue. The
+# job runs on a schedule and by hand only, never on a pull request, and never caches (tests/test_workflows.py).
+# GitHub may start scheduled runs late, and stops them after 60 days without activity in the repository (a push or a manual run
+# starts them again).
 name: watch Hyprland
 on:
+  schedule:
+    - cron: "23 5 * * *"
   workflow_dispatch:
     inputs:
-      built:
-        description: the Hyprland version the channel was built against (pkgver-pkgrel, from build-*.txt)
-        required: true
+      dry_run:
+        description: compare and report only; start no build and open no issue
+        type: boolean
+        default: false
 permissions:
+  actions: write
   contents: read
+  issues: write
+concurrency:
+  group: watch-toolkit
+  cancel-in-progress: false
 jobs:
   watch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Hyprland on Omarchy's stable and rc mirrors
-        env:
-          BUILT: ${{ inputs.built }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: The published build against Omarchy's stable and rc
         run: |
           set -euo pipefail
-          for m in stable-mirror rc-mirror; do
-            v=$(curl -fsSL "https://$m.omarchy.org/extra/os/x86_64/extra.db" |
-              tar -xzO --wildcards 'hyprland-[0-9]*/desc' | awk '/^%VERSION%$/ { getline; print; exit }')
-            if [ "$v" = "$BUILT" ]; then
-              echo "$m: hyprland $v, the channel's build: nothing to do"
+          python3 -I tools/watch_toolkit.py --out watch.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Start the rebuild, or open the issue
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The build workflow's run title (run-name: "build <ref> pkgrel <n>"), for the runs of main (a manual run, or this
+          # job's own), whatever their result: a failed build is for a person to look at, not to start again every day.
+          built=$(gh run list --workflow build.yml --limit 1000 --json displayTitle,headBranch,event \
+            -q '.[] | select(.headBranch == "main" and (.event == "workflow_dispatch" or .event == "schedule")) | .displayTitle')
+          while IFS=$'\t' read -r ref pkgrel; do
+            [ -n "$ref" ] || continue
+            [[ $ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?$ && $pkgrel =~ ^[1-9][0-9]*$ ]] || { echo "::error::unexpected ref or pkgrel"; exit 1; }
+            if grep -qxF "build $ref pkgrel $pkgrel" <<<"$built"; then
+              echo "$ref pkgrel $pkgrel: started already, left alone"
             else
-              echo "::warning::$m: hyprland $v, the channel was built for $BUILT: rebuild with pkgrel + 1 once it reaches stable"
+              echo "$ref pkgrel $pkgrel: starting the build"
+              gh workflow run build.yml --ref main -f ref="$ref" -f pkgrel="$pkgrel"
             fi
-          done
+          done < <(jq -r '.rebuild[] | [.ref, (.pkgrel | tostring)] | @tsv' watch.json)
+          if [ "$(jq -r '.issue != null' watch.json)" = true ]; then
+            title=$(jq -r '.issue.title' watch.json)
+            if gh issue list --state open --limit 100 --json title -q '.[].title' | grep -qxF "$title"; then
+              echo "an issue titled '$title' is open already"
+            else
+              jq -r '.issue.body' watch.json | gh issue create --title "$title" --body-file -
+            fi
+          fi
