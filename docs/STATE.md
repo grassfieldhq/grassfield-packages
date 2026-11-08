@@ -57,7 +57,7 @@ Last updated: 2026-11-05
       - sign in a container with the key, gpg only, no network;
       - check without the key (`check-tree --trusted --keyring-src keyring/`);
       - upload under `releases/`, the database last, never replacing a stored release build.
-    - `poll` (off until `GRASSFIELD_TAG_POLL=on`) and `watch-hyprland` (by hand).
+    - `poll` (off until `GRASSFIELD_TAG_POLL=on`) and `watch-hyprland` (the toolkit watch, daily since 2026-11-08: ABI stamp, quickshell, qt6-base against Omarchy stable and rc).
   - Integrator reviews:
     - Opus review of e373590: FAIL (B1, M1-M5, minors), all addressed (comment 6439709205).
     - Counter-review of a0a1cad: FAIL (one MAJOR left, M1: repo-add evaluates .PKGINFO lines, and ran where the key was;
