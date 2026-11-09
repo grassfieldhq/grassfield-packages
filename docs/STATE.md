@@ -436,6 +436,17 @@ Last updated: 2026-11-09
     one line per single-valued .PKGINFO key; `release-apps-check.sh` (sign-release prepare) selects apps by .PKGINFO name and
     refuses a release whose desktop depends on an app it lacks; smoke.sh looks for the desktop's depends on
     grassfield-sanaga and grassfield-notes; README lists the libalpm hooks that can match and why they are accepted.
+  - Third review of PR #22 (FAIL: the parsers): the signed artifact is now canonical. `scripts/app-repack.sh` (a third
+    container, no network) extracts each app package with bsdtar and --no-xattrs --no-acls --no-fflags, checks the tree on the
+    filesystem (file types, root owner, modes, empty getfattr, allowed paths, no repeated path or .PKGINFO), rebuilds it as
+    makepkg does (modes, owner, mtimes = builddate, regenerated .MTREE, zstd -T1: byte-reproducible) and proves it by
+    extracting the result with xattrs enabled; only that file goes to the signer and the desktop's container. The Python
+    reader and the grep fallback are removed (the repack makes them unnecessary); app-check.sh is the second check.
+    Tests run it under fakeroot (CI: as root in the container) on crafted packages: a bad-mtime header with a hidden xattr
+    (the control shows libarchive applies it), an 8 MiB package with an xattr, two .PKGINFO, a duplicate path, a symlink, a
+    `..` path, setuid, world-writable, a foreign owner, .INSTALL. CI's check job on 2c70286 did not start ("workflow file
+    issue", 0 jobs): the workflow files are unchanged since the run that passed, no YAML error was found; every workflow
+    file is now checked (duplicate keys, job and step shape) by tests/test_workflows.py.
     Open: the app containers keep the network (one container cannot cut it for cargo alone); the legal review of the
     licences is the owner's; a release rebuilds both apps in CI each time.
 

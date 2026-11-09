@@ -37,7 +37,7 @@ catalog of Grassfield Store.
 | `tools/catalog.py` | validates the sources, checks them against what they name, builds, signs and verifies the catalog (standard library) |
 | `tools/catalog-facts.sh` | gathers those facts in a throwaway Arch container: Omarchy's stable mirror, Arch's AppStream, Flathub |
 | `scripts/build-channel.sh` | one Grassfield tag or commit, built once → makepkg of grassfield's own PKGBUILD → signed packages → its **release build** for each channel it goes to (`releases/<channel>/<version>/`: packages, a database of this release alone, release notes, all signed), which the publisher reads → the channel tree made from them by `tools/publish.py`, for CI's artifact and the tests; grassfield-keyring is built once per version (reused only while it is still `keyring/`'s, the whole package); grassfield-sanaga and grassfield-notes come from `--apps`, built beforehand in a container each by `build-app.sh`, checked by `app-check.sh`, and reused from the tree when signed by the key and built from the very PKGBUILD in git; a release whose grassfield-desktop does not depend on grassfield-keyring is refused (grassfield ADR-0033 O22); throwaway keys only (it refuses to start beside the project's key) |
-| `scripts/bump-app.sh`, `scripts/app-check.sh` | `bump-app.sh <app> <commit>` moves an app's pin in one step (`--verify <app>` recomputes it from the network); `pin-check.sh` refuses an unpinned PKGBUILD; `build-app.sh` builds one app in its own container; `app-check.sh` (with `pkg-members.py`), `app-ingest.sh` and `release-apps-check.sh` are the gate and the reuse rule between that container and the one that signs |
+| `scripts/bump-app.sh`, `scripts/app-check.sh` | `bump-app.sh <app> <commit>` moves an app's pin in one step (`--verify <app>` recomputes it from the network); `pin-check.sh` refuses an unpinned PKGBUILD; `build-app.sh` builds one app in its own container; `app-repack.sh` (with `app-lib.sh`) rebuilds each package canonically in a container with no network; `app-check.sh`, `app-ingest.sh` and `release-apps-check.sh` are the second check and the reuse rule between that container and the one that signs |
 | `scripts/omarchy-trust.sh` | `[omarchy]`'s package signer trusted in a throwaway container's pacman keyring as an Omarchy machine trusts it: the fingerprint Omarchy pins, the key fetched over HTTPS from keys.openpgp.org and used only if it is that one key alone; one step for `build-channel.sh` and `tests/smoke.sh` |
 | `scripts/sign-release.sh` | a tested release build signed with the project's key (the `release` job, disabled), in two steps so the key never meets anything that reads package contents: `prepare` without the key (a package already published used as it is, the keyring compared with `keyring/`, `repo-add`), `sign` with gpg only, on an allowlist of names |
 | `scripts/notes.py` | `grassfield-notes.json` from grassfield's `packaging/release-notes/<VERSION>.{en,fr}.txt`, with the channel's earlier releases from the tag's own repository |
@@ -100,28 +100,37 @@ depends on them (grassfield ADR-0055).
   (and why: the security fixes, the version) and is reviewed: the reviewer runs `scripts/bump-app.sh --verify <app>` and gets
   the same version, count and checksum, and reads the app's diff between the two commits. Any other edit of a
   `PKGBUILD` is a new `pkgrel`.
-- **What the desktop's container takes.** `build-channel.sh --apps DIR` never builds or runs an app: `scripts/app-ingest.sh`
-  takes the one file the PKGBUILD names, after `scripts/app-check.sh` passed it. The container that built it ran third-party
-  code and could have rewritten the package file, so the gate checks what a client's pacman would act on:
-  - the paths are exactly the app's own (`usr/bin/<its binary>` alone, its `.desktop`, its hicolor icons, its metainfo, its
-    licences folder; no `.INSTALL`, no hook, no other binary, no `usr/share/doc`);
-  - every member is a regular file or a folder, owned by root, with no setuid, setgid or sticky bit and no group- or
-    world-writable mode, and **no pax extension at all**: pacman restores file capabilities (`security.capability`), ACLs and
-    flags from the archive without any install script, and `bsdtar -tv` does not print them, so `scripts/pkg-members.py`
-    reads the members with Python's `tarfile` (where python3 is absent, in `sign-release.sh prepare`'s bare, network-less
-    container, the decompressed stream is scanned for such headers instead);
-  - one line for each single-valued `.PKGINFO` key (repo-add keeps the last), the PKGBUILD's own dependency lines, and a
-    `.BUILDINFO` recording the SHA-256 of this very `PKGBUILD`.
-  It signs the file and installs it with `--noscriptlet`, so no scriptlet runs; **libalpm hooks still run**, as root, over
-  the app's data, in the desktop's container and on a client. With the paths above, the stock hooks that can match are
+- **The package is made canonical, not predicted.** The file an app container wrote is untrusted (build code could have
+  written it), and every parser of ours differs from libarchive's somewhere: Python's `tarfile` stops silently at a header
+  libarchive accepts, a second `.PKGINFO` member is read by one reader and not by repo-add, a SIGPIPE inverts a `grep`. So
+  `scripts/app-repack.sh` runs in a third container, with no network and only this repository, the package (read-only) and
+  an output folder:
+  1. `bsdtar -tf` lists the members: no path twice (`.PKGINFO` included), every path the app's own
+     (`scripts/app-lib.sh`: `usr/bin/<its binary>` alone, its `.desktop`, its hicolor icons, its metainfo, its licences
+     folder; no `.INSTALL`, no hook, no other binary, no `usr/share/doc`), every owner and mode as libarchive prints them;
+  2. bsdtar extracts it as root, never `-P`, into an empty folder, with `--no-xattrs --no-acls --no-fflags`: nothing in the
+     archive can put an attribute, a capability (pacman restores `security.capability` with no install script), an ACL or
+     a flag on the tree;
+  3. the tree is checked on the filesystem itself: only regular files and folders, owner root:root, no setuid, setgid or
+     sticky bit, no group or world write, `getfattr -R -d -m -` empty, only the allowed paths, one `.PKGINFO`;
+  4. the package is rebuilt as makepkg's `create_package` does: folders 0755, files 0644 (the binary 0755), owner root, every
+     mtime the package's builddate, `.MTREE` regenerated by `bsdtar --format=mtree` with makepkg's options, makepkg's file
+     order, zstd on one thread (equal input gives equal bytes: repacking twice, or repacking the result, is byte-identical);
+  5. proof: the result is extracted again with xattrs, ACLs and flags enabled, no attribute appears, the tree is the one
+     checked, and `app-check.sh` passes it.
+  Only that repacked file goes on: `build-channel.sh --apps DIR` takes it through `scripts/app-ingest.sh` and `scripts/app-check.sh`
+  (a second check: pinned PKGBUILD, the same paths, no path or `.PKGINFO`, `.BUILDINFO` or `.MTREE` member twice, root owner and
+  plain modes, one line for each single-valued `.PKGINFO` key, the PKGBUILD's own dependency lines, a `.BUILDINFO` recording
+  the SHA-256 of this very `PKGBUILD`), signs it and installs it with `--noscriptlet`, so no scriptlet runs. There is no
+  parser of our own left in the path (the Python reader and the stream scan were removed): `sign-release.sh prepare` only
+  sees packages that went through the repack, and runs the same bsdtar-based `app-check.sh`. **libalpm hooks still run**, as root,
+  over the app's data, in the desktop's container and on a client. With the paths above, the stock hooks that can match are
   only these: `gtk-update-icon-cache` (`usr/share/icons/*/`, writes `icon-theme.cache` for the hicolor folder) and
   `update-desktop-database` (`usr/share/applications/*.desktop`, writes `mimeinfo.cache` from the `MimeType=` lines). Both are
   stock Arch hooks that every desktop application triggers, parse the app's PNG, SVG and `.desktop` data with their own
   parsers and write only their caches; accepted. No path of the allowlist matches the hooks for MIME packages, fonts, schemas,
-  AppStream catalogs (`usr/share/swcatalog`, not `usr/share/metainfo`), systemd, udev, depmod or ldconfig, and the packages
-  of a client's own system-wide hooks that fire for every package (`Target = *`, such as Omarchy's update guard) never read
-  a package's contents. `app-check.sh` itself parses the untrusted archive, as root, with bsdtar, zstd and Python, and
-  extracts nothing.
+  AppStream catalogs (`usr/share/swcatalog`, not `usr/share/metainfo`), systemd, udev, depmod or ldconfig, and the system-wide
+  hooks that fire for every package (`Target = *`, such as Omarchy's update guard) never read a package's contents.
 - **Reuse.** A package of the same name already in the tree is used again, with its signature, only if the key signed it and
   `app-check.sh` finds it built from this very `PKGBUILD`; a changed `PKGBUILD` without a new `pkgrel` stops the build, and so
   does `sign-release.sh prepare`: `release-apps-check.sh` runs `app-check.sh` on every package of the release whose

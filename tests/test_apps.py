@@ -259,6 +259,83 @@ def fake_package(out, app, pkgbuild=None, extra_paths=(), extra_info="", pkgbuil
     return package
 
 
+def read_members(pkg):
+    """[(path, data)] of a clean package, in archive order (files only; folders are re-created by raw_package)."""
+    out = []
+    proc = subprocess.Popen(["zstd", "-dc", "--", str(pkg)], stdout=subprocess.PIPE)
+    with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+        for m in tar:
+            if m.isreg():
+                out.append((m.name, tar.extractfile(m).read()))
+    proc.wait()
+    return out
+
+
+def tar_block(name, data=b"", typeflag=b"0", mode=0o644, uid=0, gid=0, uname="root", gname="root", mtime=b"00000000000\0", linkname=""):
+    """One ustar member with every header byte chosen (Python's tarfile cannot write a bad mtime field)."""
+    h = bytearray(512)
+
+    def put(off, val, size):
+        b = val if isinstance(val, bytes) else val.encode()
+        h[off:off + len(b[:size])] = b[:size]
+    put(0, name, 100)
+    put(100, f"{mode:07o}\0", 8)
+    put(108, f"{uid:07o}\0", 8)
+    put(116, f"{gid:07o}\0", 8)
+    put(124, f"{len(data):011o}\0", 12)
+    put(136, mtime, 12)
+    h[148:156] = b" " * 8
+    h[156:157] = typeflag
+    put(157, linkname, 100)
+    put(257, "ustar\0", 6)
+    put(263, "00", 2)
+    put(265, uname, 32)
+    put(297, gname, 32)
+    put(148, f"{sum(h):06o}\0 ", 8)
+    return bytes(h) + data + b"\0" * (-len(data) % 512)
+
+
+def pax_block(records):
+    """A pax extended header ('x') that applies to the next member."""
+    data = b""
+    for key, value in records.items():
+        body = f" {key}={value}\n".encode()
+        n = len(body) + 1
+        while len(str(n)) + len(body) != n:
+            n = len(str(n)) + len(body)
+        data += str(n).encode() + body
+    return tar_block("PaxHeader/x", data, typeflag=b"x")
+
+
+def raw_package(out, members, name="x"):
+    """A package from a list of (path, data[, opts]) where opts may hold tar_block keywords and 'pax' (a dict written
+    before the member), the folders first. Returns the .pkg.tar.zst path."""
+    blob = b""
+    seen = set()
+    for item in members:
+        path = item[0]
+        parts = path.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            d = "/".join(parts[:i]) + "/"
+            if d not in seen and ".." not in d:
+                seen.add(d)
+                blob += tar_block(d, typeflag=b"5", mode=0o755)
+    for item in members:
+        path, data = item[0], item[1]
+        opts = dict(item[2]) if len(item) > 2 else {}
+        pax = opts.pop("pax", None)
+        if pax:
+            blob += pax_block(pax)
+        blob += tar_block(path, data, **opts)
+    blob += b"\0" * 1024
+    raw = pathlib.Path(out, f"{name}-{os.urandom(3).hex()}.tar")
+    raw.write_bytes(blob)
+    package = pathlib.Path(out, f"{name}-{os.urandom(3).hex()}.pkg.tar.zst")
+    subprocess.run(["zstd", "-q", "-f", "-o", str(package), str(raw)], check=True)
+    raw.unlink()
+    return package
+
+
 @unittest.skipUnless(HAVE_BSDTAR, "needs bsdtar (libarchive)")
 class AppCheck(unittest.TestCase):
     """scripts/app-check.sh on small fake packages: what may be signed, installed and reused."""
@@ -306,14 +383,8 @@ class AppCheck(unittest.TestCase):
 
     BIN = "usr/bin/grassfield-notes"
 
-    def test_what_a_listing_cannot_show_is_refused(self):
-        """Review of the fixes, finding 1: pacman restores file capabilities from the archive's pax headers, with no install
-        script. bsdtar -tv prints a plain -rwxr-xr-x root root for such a file; the members are read by tarfile."""
+    def test_owners_and_modes_are_refused(self):
         cases = {
-            "a file capability (cap_setuid+ep)": dict(pax={self.BIN: {"SCHILY.xattr.security.capability": "\x01\x00\x00\x02"}}),
-            "a libarchive-spelled capability": dict(pax={self.BIN: {"LIBARCHIVE.xattr.security.capability": "AQAAAg=="}}),
-            "a POSIX ACL": dict(pax={self.BIN: {"SCHILY.acl.access": "user::rwx,user:builder:rwx,group::r-x,mask::rwx,other::r-x"}}),
-            "file flags": dict(pax={self.BIN: {"SCHILY.fflags": "nodump"}}),
             "a non-root owner": dict(owners={self.BIN: (1000, 1000, "builder", "builder")}),
             "a non-root group alone": dict(owners={self.BIN: (0, 100, "root", "users")}),
             "a setuid bit": dict(modes={self.BIN: 0o4755}),
@@ -324,28 +395,24 @@ class AppCheck(unittest.TestCase):
         }
         for why, kw in cases.items():
             with self.subTest(why):
-                pkg = fake_package(self.tmp, "grassfield-notes", **kw)
-                for python in (True, False):
-                    env = dict(os.environ) if python else dict(os.environ, APP_CHECK_NO_PYTHON="1")
-                    r = subprocess.run([str(ROOT / "scripts" / "app-check.sh"), str(pkg), str(ROOT / "grassfield-notes")],
-                                       capture_output=True, text=True, env=env)
-                    self.assertEqual(r.returncode, 1, f"python={python}: {r.stderr}")
+                self.assertEqual(self.check(fake_package(self.tmp, "grassfield-notes", **kw)).returncode, 1, why)
 
-    def test_a_clean_package_passes_with_and_without_python(self):
-        pkg = fake_package(self.tmp, "grassfield-notes")
-        for env in (dict(os.environ), dict(os.environ, APP_CHECK_NO_PYTHON="1")):
-            r = subprocess.run([str(ROOT / "scripts" / "app-check.sh"), str(pkg), str(ROOT / "grassfield-notes")],
-                               capture_output=True, text=True, env=env)
-            self.assertEqual((r.returncode, r.stderr), (0, ""))
+    def test_a_repeated_member_or_path_is_refused(self):
+        """Third review, finding 3: repo-add reads only the first .PKGINFO, app-check read them joined."""
+        base = fake_package(self.tmp, "grassfield-notes")
+        members = read_members(base)
+        for why, extra in (("a second .PKGINFO", [(".PKGINFO", b"pkgname = grassfield-notes\n")]),
+                           ("a second .MTREE", [(".MTREE", b"x")]),
+                           ("a second binary", [(self.BIN, b"#!/bin/sh\n")])):
+            with self.subTest(why):
+                pkg = raw_package(self.tmp, members + extra)
+                r = self.check(pkg)
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn("listed twice", r.stderr)
 
-    def test_the_tar_parser_names_the_header(self):
-        pkg = fake_package(self.tmp, "grassfield-notes", pax={self.BIN: {"SCHILY.xattr.security.capability": "x"}})
-        r = subprocess.run(["python3", "-I", str(ROOT / "scripts" / "pkg-members.py"), str(pkg)], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("SCHILY.xattr.security.capability", r.stderr)
-        # The listing the old gate relied on shows nothing wrong about the same package.
-        listing = subprocess.run(["bsdtar", "-tvf", str(pkg)], capture_output=True, text=True).stdout
-        self.assertRegex(listing, r"-rwxr-xr-x\s+0 root\s+root\s+\d+ .* usr/bin/grassfield-notes")
+    def test_a_clean_package_passes(self):
+        r = self.check(fake_package(self.tmp, "grassfield-notes"))
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
 
     def test_a_repeated_single_valued_key_is_refused(self):
         for key, line in (("pkgver", "pkgver = 999-1"), ("pkgname", "pkgname = grassfield-desktop"), ("arch", "arch = any"),
@@ -513,6 +580,19 @@ class Isolation(unittest.TestCase):
         self.assertLess(self.workflow.index("/packages/scripts/build-app.sh"), self.workflow.index("/packages/scripts/build-channel.sh"))
         self.assertNotIn("build-app.sh", desktop_run)
 
+    def test_the_repack_container_has_no_network_and_nothing_else(self):
+        """Third review: the package an app container wrote is untrusted; a container with no network repacks it."""
+        steps = re.findall(r"docker run[^\n]*\\\n[^\n]*", self.workflow)
+        repack_run = next(s for s in steps if "app-repack.sh" in s)
+        self.assertIn("--network none", repack_run)
+        mounts = sorted(m.split(":", 1)[1] for m in re.findall(r'-v "([^"]+)"', repack_run))
+        self.assertEqual(mounts, ["/in:ro", "/out", "/packages:ro"])
+        self.assertLess(self.workflow.index("/packages/scripts/build-app.sh"), self.workflow.index("/packages/scripts/app-repack.sh"))
+        self.assertLess(self.workflow.index("/packages/scripts/app-repack.sh"), self.workflow.index("/packages/scripts/build-channel.sh"))
+        # The desktop's container is given the repacked files only.
+        self.assertIn("cp apps/repacked/grassfield-sanaga/*.pkg.tar.zst apps/repacked/grassfield-notes/*.pkg.tar.zst apps/all/", self.workflow)
+        self.assertNotIn("cp apps/grassfield-sanaga", self.workflow)
+
     def test_the_build_job_still_builds_the_ref_in_its_own_step(self):
         self.assertIn('-e REF -e PKGREL', self.workflow)
 
@@ -559,6 +639,174 @@ class SignRelease(unittest.TestCase):
         for name in APPS:
             ok = subprocess.run(["bash", "-c", '[[ $1 =~ $2 ]]', "_", f"{name}-1.0.0.r24.g2daf1c8-1-x86_64.pkg.tar.zst", package]).returncode
             self.assertEqual(ok, 0)
+
+
+def repack_command():
+    """The repack script as root in a container, or under fakeroot where a test runs as a user; None if neither."""
+    tools = all(shutil.which(t) for t in ("bsdtar", "zstd", "gzip", "getfattr", "find"))
+    if not tools:
+        return None
+    if os.geteuid() == 0:
+        return [] if os.path.exists("/.dockerenv") else None
+    return ["fakeroot", "--"] if shutil.which("fakeroot") else None
+
+
+@unittest.skipIf(repack_command() is None, "needs bsdtar, zstd, getfattr and root in a container or fakeroot")
+class Repack(unittest.TestCase):
+    """Third review of PR #22: the signed artifact is made canonical, not predicted. scripts/app-repack.sh extracts with
+    libarchive (no xattrs, ACLs or flags), checks the tree on the filesystem and rebuilds the package; every crafted package
+    here is refused, or comes out clean and proven clean."""
+
+    APP = "grassfield-notes"
+    BIN = "usr/bin/grassfield-notes"
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.out = self.tmp / "out"
+        self.out.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def members(self):
+        return read_members(fake_package(self.tmp, self.APP))
+
+    def repack(self, pkg, out=None):
+        out = out or self.out
+        out.mkdir(exist_ok=True)
+        return subprocess.run(repack_command() + [str(ROOT / "scripts" / "app-repack.sh"), "--app", self.APP, "--in", str(pkg),
+                                                   "--out", str(out)], capture_output=True, text=True)
+
+    def proven_clean(self, package):
+        """Extracted with xattrs, ACLs and flags enabled: no attribute; the listing is plain root-owned 0644/0755."""
+        d = self.tmp / "proof"
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir()
+        own = "--same-owner" if os.geteuid() == 0 else "--no-same-owner"
+        subprocess.run(["bsdtar", "-xf", str(package), "-C", str(d), "--xattrs", "--acls", "--fflags", own, "-p"], check=True, capture_output=True)
+        attrs = subprocess.run(["getfattr", "-R", "-h", "-d", "-m", "-", str(d)], capture_output=True, text=True).stdout
+        self.assertEqual(attrs, "")
+        listing = subprocess.run(["bsdtar", "-tvf", str(package)], capture_output=True, text=True).stdout
+        for line in listing.splitlines():
+            self.assertRegex(line, r"^[-d]rw[x-]r-[x-]r-[x-]\s+0 root\s+root\s")
+        pax = subprocess.run(["bash", "-c", 'zstd -dc -- "$1" | LC_ALL=C grep -ac "SCHILY\\.\\|LIBARCHIVE\\."', "_", str(package)],
+                             capture_output=True, text=True).stdout.strip()
+        self.assertEqual(pax, "0")
+
+    def test_a_clean_package_comes_out_clean_and_reproducible(self):
+        pkg = fake_package(self.tmp, self.APP)
+        r = self.repack(pkg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        first = (self.out / pkg.name).read_bytes()
+        self.proven_clean(self.out / pkg.name)
+        # Repacking the repacked file, and the original again, gives the same bytes: equal input, equal canonical output.
+        other = self.tmp / "out2"
+        self.assertEqual(self.repack(pkg, other).returncode, 0)
+        self.assertEqual((other / pkg.name).read_bytes(), first)
+        third = self.tmp / "out3"
+        self.assertEqual(self.repack(self.out / pkg.name, third).returncode, 0)
+        self.assertEqual((third / pkg.name).read_bytes(), first)
+        # .MTREE is regenerated: gzip, makepkg's keywords, the binary's sha256.
+        mtree = subprocess.run(["bash", "-c", 'bsdtar -xOf "$1" .MTREE | gzip -dc', "_", str(self.out / pkg.name)],
+                               capture_output=True, text=True).stdout
+        self.assertIn("usr/bin/grassfield-notes", mtree)
+        self.assertIn("sha256digest=", mtree)
+        # app-check passes the result, and the order is makepkg's.
+        chk = subprocess.run([str(ROOT / "scripts" / "app-check.sh"), str(self.out / pkg.name), str(ROOT / self.APP)], capture_output=True, text=True)
+        self.assertEqual((chk.returncode, chk.stderr), (0, ""))
+        names = subprocess.run(["bsdtar", "-tf", str(self.out / pkg.name)], capture_output=True, text=True).stdout.split()
+        self.assertEqual(names[:3], [".BUILDINFO", ".MTREE", ".PKGINFO"])
+
+    def test_normal_modes_and_owners_come_out_canonical(self):
+        members = [(m[0], m[1], {"mode": 0o600}) if m[0].endswith(".desktop") else (m[0], m[1]) for m in self.members()]
+        pkg = self.named(members)
+        self.assertEqual(self.repack(pkg).returncode, 0)
+        self.proven_clean(self.out / pkg.name)
+
+    def named(self, members):
+        av = f"{var(self.APP, 'pkgver')}-{var(self.APP, 'pkgrel')}"
+        pkg = raw_package(self.tmp, members, name="tmp")
+        named = self.tmp / f"{self.APP}-{av}-x86_64.pkg.tar.zst"
+        shutil.copy(pkg, named)
+        return named
+
+    def hidden_xattr(self, size=0, bad_mtime=True):
+        """The review's variant: a member with an invalid mtime field (tarfile stops there, libarchive goes on), then a pax
+        header that sets a user xattr on the binary (a security.capability one needs privileges the test lacks, and the
+        path is the same)."""
+        members = self.members()
+        out = []
+        for item in members:
+            path, data = item[0], item[1]
+            if path.endswith(".png") and bad_mtime:
+                out.append((path, data, {"mtime": b"0000000000x\0"}))
+            elif path == self.BIN:
+                out.append((path, data + b"\0" * size, {"mode": 0o755, "pax": {"SCHILY.xattr.user.review": "applied",
+                                                                              "LIBARCHIVE.xattr.user.review2": "YXBwbGllZA=="}}))
+            else:
+                out.append((path, data))
+        return self.named(out)
+
+    def test_a_bad_mtime_header_with_an_xattr_behind_it_comes_out_clean(self):
+        pkg = self.hidden_xattr()
+        # The original, extracted the way pacman can (xattrs enabled): the attribute is applied. Where the filesystem takes
+        # no user xattr the control shows nothing, and the assertion below still holds.
+        ctl = self.tmp / "ctl"
+        ctl.mkdir()
+        subprocess.run(["bsdtar", "-xf", str(pkg), "-C", str(ctl), "--xattrs", "-p", "--no-same-owner"], capture_output=True)
+        applied = subprocess.run(["getfattr", "-R", "-h", "-d", "-m", "-", str(ctl)], capture_output=True, text=True).stdout
+        r = self.repack(pkg)
+        self.assertEqual(r.returncode, 0, f"(control: {applied!r}) {r.stderr}")
+        self.proven_clean(self.out / pkg.name)
+
+    def test_a_package_of_8_mib_with_an_xattr_comes_out_clean(self):
+        pkg = self.hidden_xattr(size=8 << 20, bad_mtime=False)
+        r = self.repack(pkg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.proven_clean(self.out / pkg.name)
+
+    def refused(self, members, why):
+        r = self.repack(self.named(members))
+        self.assertEqual(r.returncode, 1, f"{why}: {r.stdout}{r.stderr}")
+        self.assertEqual(list(self.out.iterdir()), [], why)
+        return r.stderr
+
+    def test_two_pkginfo_members_and_a_duplicate_path_are_refused(self):
+        members = self.members()
+        pkginfo = next(d for p, d in ((m[0], m[1]) for m in members) if p == ".PKGINFO")
+        self.assertIn("listed twice", self.refused(members + [(".PKGINFO", pkginfo)], "two .PKGINFO"))
+        self.assertIn("listed twice", self.refused(members + [(self.BIN, b"#!/bin/sh\n")], "a duplicate binary"))
+
+    def test_a_link_a_dotdot_path_and_setuid_are_refused(self):
+        members = self.members()
+        self.refused(members + [("usr/share/licenses/grassfield-notes/link", b"", {"typeflag": b"2", "linkname": "/etc/passwd", "mode": 0o777})], "a symlink")
+        self.refused(members + [("usr/share/licenses/grassfield-notes/../../../../etc/x", b"x")], "a .. path")
+        self.refused([(m[0], m[1], {"mode": 0o4755}) if m[0] == self.BIN else (m[0], m[1]) for m in members], "setuid")
+        self.refused([(m[0], m[1], {"mode": 0o666}) if m[0].endswith("LICENSE") else (m[0], m[1]) for m in members], "world-writable")
+        self.refused([(m[0], m[1], {"uid": 1000, "gid": 1000, "uname": "builder", "gname": "builder"}) if m[0] == self.BIN else (m[0], m[1]) for m in members], "a non-root owner")
+        self.refused(members + [(".INSTALL", b"post_install() { id; }")], "an install script")
+        self.refused(members + [("usr/bin/snapper", b"x")], "another binary")
+
+    def test_the_wrong_file_name_and_a_link_are_refused(self):
+        pkg = fake_package(self.tmp, self.APP)
+        renamed = self.tmp / "other-1-x86_64.pkg.tar.zst"
+        shutil.copy(pkg, renamed)
+        self.assertEqual(self.repack(renamed).returncode, 1)
+        link = self.tmp / "link.pkg.tar.zst"
+        os.symlink(pkg, link)
+        self.assertEqual(self.repack(link).returncode, 2)  # usage: a link is never read
+
+    def test_a_package_that_is_not_an_archive_is_refused(self):
+        junk = self.tmp / f"{self.APP}-{var(self.APP, 'pkgver')}-{var(self.APP, 'pkgrel')}-x86_64.pkg.tar.zst"
+        junk.write_bytes(b"not an archive" * 100)
+        self.assertEqual(self.repack(junk).returncode, 1)
+
+    def test_the_script_runs_only_as_root_in_a_container(self):
+        body = text("scripts/app-repack.sh")
+        self.assertIn("-f /.dockerenv && $EUID == 0", body)
+        self.assertIn('--no-xattrs --no-acls --no-fflags "${owner[@]}" -p', body)
+        self.assertNotRegex(body, r"bsdtar -[a-zA-Z]*P")
+        self.assertNotIn("python", body)
 
 
 @unittest.skipUnless(HAVE_BSDTAR, "needs bsdtar and zstd")
