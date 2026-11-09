@@ -228,8 +228,9 @@ def fake_package(out, app, pkgbuild=None, extra_paths=(), extra_info="", pkgbuil
     opt = [f"optdepend = {x}" for x in pkgbuild_vars(app, "optdepends").splitlines() if x]
     prov = [f"provides = {x}" for x in pkgbuild_vars(app, "provides").split()]
     conf = [f"conflict = {x}" for x in pkgbuild_vars(app, "conflicts").split()]
-    info = "\n".join([f"pkgname = {name}", f"pkgbase = {name}", f"pkgver = {ver}", "pkgdesc = x", "arch = x86_64",
-                      "license = MIT", "builddate = 1", "packager = t", "size = 4"] + deps + opt + prov + conf) + "\n"
+    lic = [f"license = {x}" for x in pkgbuild_vars(app, "license").split()]
+    info = "\n".join([f"pkgname = {name}", f"pkgbase = {name}", f"pkgver = {ver}", f"pkgdesc = {var(app, 'pkgdesc')}",
+                      f"url = {var(app, 'url')}", "arch = x86_64", "builddate = 1", "packager = t", "size = 4"] + lic + deps + opt + prov + conf) + "\n"
     digest = pkgbuild_sum or hashlib.sha256(pkgbuild.read_bytes()).hexdigest()
     files[".PKGINFO"] = info + extra_info
     files[".BUILDINFO"] = f"format = 2\npkgname = {name}\npkgbuild_sha256sum = {digest}\n"
@@ -312,16 +313,16 @@ def raw_package(out, members, name="x"):
     before the member), the folders first. Returns the .pkg.tar.zst path."""
     blob = b""
     seen = set()
+    enc = lambda x: x if isinstance(x, bytes) else x.encode()
     for item in members:
-        path = item[0]
-        parts = path.split("/")[:-1]
+        parts = enc(item[0]).split(b"/")[:-1]
         for i in range(1, len(parts) + 1):
-            d = "/".join(parts[:i]) + "/"
-            if d not in seen and ".." not in d:
+            d = b"/".join(parts[:i]) + b"/"
+            if d not in seen and b".." not in d:
                 seen.add(d)
                 blob += tar_block(d, typeflag=b"5", mode=0o755)
     for item in members:
-        path, data = item[0], item[1]
+        path, data = enc(item[0]), item[1]
         opts = dict(item[2]) if len(item) > 2 else {}
         pax = opts.pop("pax", None)
         if pax:
@@ -641,17 +642,45 @@ class SignRelease(unittest.TestCase):
             self.assertEqual(ok, 0)
 
 
+def _tools():
+    return all(shutil.which(t) for t in ("bsdtar", "zstd", "gzip", "getfattr", "find", "iconv", "makepkg", "setpriv"))
+
+
+ROOT_IN_CONTAINER = os.geteuid() == 0 and os.path.exists("/.dockerenv") and _tools()
+UNDER_FAKEROOT = os.geteuid() != 0 and shutil.which("fakeroot") is not None and _tools()
+
+
+def _docker_usable():
+    if shutil.which("docker") is None or os.path.exists("/.dockerenv"):
+        return False
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def repack_command():
-    """The repack script as root in a container, or under fakeroot where a test runs as a user; None if neither."""
-    tools = all(shutil.which(t) for t in ("bsdtar", "zstd", "gzip", "getfattr", "find"))
-    if not tools:
-        return None
-    if os.geteuid() == 0:
-        return [] if os.path.exists("/.dockerenv") else None
-    return ["fakeroot", "--"] if shutil.which("fakeroot") else None
+    """As root in a container (the reference, CI), or under fakeroot where a test runs as a user: there the archive's
+    listing and the filesystem checks that need no privilege are all the test can show."""
+    return [] if ROOT_IN_CONTAINER else ["fakeroot", "--"]
 
 
-@unittest.skipIf(repack_command() is None, "needs bsdtar, zstd, getfattr and root in a container or fakeroot")
+NOT_VERIFIED = "NOT VERIFIED: needs root in a throwaway container (CI, or docker here): xattrs and owners are not applied under fakeroot"
+
+
+@unittest.skipUnless(_docker_usable(), "NOT VERIFIED here as root: no usable docker (the Repack tests run as root in CI)")
+class RepackAsRootInAContainer(unittest.TestCase):
+    """The reference run: the Repack tests as real root in a throwaway Arch container (tests/run-in-container.sh)."""
+
+    def test_the_repack_suite_passes_as_root(self):
+        env = dict(os.environ, GRASSFIELD_UNITTEST_ARGS="-p test_apps.py -k Repack")
+        r = subprocess.run([str(ROOT / "tests" / "run-in-container.sh"), "-e", "GRASSFIELD_UNITTEST_ARGS"], env=env,
+                           capture_output=True, text=True, timeout=1500)
+        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-1500:])
+        self.assertNotIn("skipped", r.stderr.splitlines()[-1] if r.stderr else "")
+
+
+@unittest.skipUnless(ROOT_IN_CONTAINER or UNDER_FAKEROOT, "needs bsdtar, zstd, getfattr, makepkg, setpriv and root in a container or fakeroot")
 class Repack(unittest.TestCase):
     """Third review of PR #22: the signed artifact is made canonical, not predicted. scripts/app-repack.sh extracts with
     libarchive (no xattrs, ACLs or flags), checks the tree on the filesystem and rebuilds the package; every crafted package
@@ -682,8 +711,8 @@ class Repack(unittest.TestCase):
         d = self.tmp / "proof"
         shutil.rmtree(d, ignore_errors=True)
         d.mkdir()
-        own = "--same-owner" if os.geteuid() == 0 else "--no-same-owner"
-        subprocess.run(["bsdtar", "-xf", str(package), "-C", str(d), "--xattrs", "--acls", "--fflags", own, "-p"], check=True, capture_output=True)
+        subprocess.run(["bsdtar", "-x", "-f", str(package), "-C", str(d), "--xattrs", "--acls", "--fflags", "--no-same-owner", "-p"],
+                       check=True, capture_output=True)
         attrs = subprocess.run(["getfattr", "-R", "-h", "-d", "-m", "-", str(d)], capture_output=True, text=True).stdout
         self.assertEqual(attrs, "")
         listing = subprocess.run(["bsdtar", "-tvf", str(package)], capture_output=True, text=True).stdout
@@ -747,6 +776,7 @@ class Repack(unittest.TestCase):
                 out.append((path, data))
         return self.named(out)
 
+    @unittest.skipUnless(ROOT_IN_CONTAINER, NOT_VERIFIED)
     def test_a_bad_mtime_header_with_an_xattr_behind_it_comes_out_clean(self):
         pkg = self.hidden_xattr()
         # The original, extracted the way pacman can (xattrs enabled): the attribute is applied. Where the filesystem takes
@@ -759,6 +789,7 @@ class Repack(unittest.TestCase):
         self.assertEqual(r.returncode, 0, f"(control: {applied!r}) {r.stderr}")
         self.proven_clean(self.out / pkg.name)
 
+    @unittest.skipUnless(ROOT_IN_CONTAINER, NOT_VERIFIED)
     def test_a_package_of_8_mib_with_an_xattr_comes_out_clean(self):
         pkg = self.hidden_xattr(size=8 << 20, bad_mtime=False)
         r = self.repack(pkg)
@@ -801,10 +832,106 @@ class Repack(unittest.TestCase):
         junk.write_bytes(b"not an archive" * 100)
         self.assertEqual(self.repack(junk).returncode, 1)
 
+    def test_paths_with_a_space_a_control_byte_a_newline_or_invalid_utf8_are_refused(self):
+        """Fourth review, finding 3: libalpm writes a name raw into its database; a newline would read back as an entry."""
+        members = self.members()
+        base = "usr/share/licenses/grassfield-notes/"
+        for why, raw in (("a newline", base.encode() + b"x\netc/passwd"), ("a control byte", base.encode() + b"x\x01y"),
+                         ("invalid UTF-8", base.encode() + b"x\xff\xfey"), ("a space", base.encode() + b"a b"),
+                         ("a leading dot", base.encode() + b".hidden"), ("a dot-dot segment", base.encode() + b"..")):
+            with self.subTest(why):
+                self.refused(members + [(raw, b"x")], why)
+
+    def test_the_path_rule_itself(self):
+        rule = lambda path: subprocess.run(["bash", "-c", 'source "$1"; app_path_ok grassfield-notes "$2"', "_", str(ROOT / "scripts" / "app-lib.sh"), path]).returncode
+        for ok in ("usr/bin/grassfield-notes", "usr/share/licenses/grassfield-notes/fonts/epaint_default_fonts-0.37.0/OFL.txt",
+                   "usr/share/licenses/grassfield-notes/LICENSE-APACHE", "usr/share/licenses/grassfield-notes/a@b+c/", ".PKGINFO", ".MTREE",
+                   "usr/share/icons/hicolor/512x512@2/apps/grassfield-notes.png"):
+            self.assertEqual(rule(ok), 0, ok)
+        for bad in ("usr/share/licenses/grassfield-notes/a b", "usr/share/licenses/grassfield-notes/.x", "usr/share/licenses/grassfield-notes/..",
+                    "usr/share/licenses/grassfield-notes/x\ty", "usr/share/licenses/grassfield-notes/\u00e9", "usr/bin/snapper", "/usr/bin/grassfield-notes",
+                    "usr/share/licenses/grassfield-notes//x", "usr/share/.hidden/", "usr/.PKGINFO", ".INSTALL", ""):
+            self.assertEqual(rule(bad), 1, repr(bad))
+
+    def test_magic_bytes_come_before_any_other_reader(self):
+        name = f"{self.APP}-{var(self.APP, 'pkgver')}-{var(self.APP, 'pkgrel')}-x86_64.pkg.tar.zst"
+        # A cpio archive and a zip, zstd-compressed (libarchive would read both), a plain tar not compressed at all.
+        inputs = {}
+        raw = self.tmp / "raw"
+        raw.write_bytes(b"070701" + b"0" * 200)
+        inputs["cpio under zstd"] = raw
+        for why, path in inputs.items():
+            comp = self.tmp / f"{why.replace(' ', '_')}.zst"
+            subprocess.run(["zstd", "-q", "-f", "-o", str(comp), str(path)], check=True)
+            dest = self.tmp / why.replace(" ", "_") / name
+            dest.parent.mkdir()
+            shutil.copy(comp, dest)
+            r = self.repack(dest)
+            self.assertEqual(r.returncode, 1, why)
+            self.assertIn("not a tar archive", r.stderr)
+        tar_plain = self.tmp / "plain" / name
+        tar_plain.parent.mkdir()
+        tar_plain.write_bytes(tar_block("x", b"x") + b"\0" * 1024)
+        r = self.repack(tar_plain)
+        self.assertEqual((r.returncode, "not a zstd frame" in r.stderr), (1, True))
+
+    def test_pkginfo_is_generated_from_the_pkgbuild_and_the_original_only_compared(self):
+        # An ESC sequence in the licence line: the original differs from what the PKGBUILD says, so the package is refused.
+        pkg = fake_package(self.tmp, self.APP, extra_info="license = MIT\x1b]0;owned\x07\x1b[2J\n")
+        r = self.repack(pkg)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("plain UTF-8", r.stderr)
+        self.assertEqual(list(self.out.iterdir()), [])
+        # A licence line that is clean text but not the PKGBUILD's.
+        r = self.repack(fake_package(self.tmp, self.APP, extra_info="license = GPL\n"))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("is not what", r.stderr)
+        # A clean package: the result's .PKGINFO is the generated one (its own comment, packager and size), never the original.
+        pkg = fake_package(self.tmp, self.APP)
+        self.assertEqual(self.repack(pkg).returncode, 0)
+        info = subprocess.run(["bsdtar", "-xOf", str(self.out / pkg.name), ".PKGINFO"], capture_output=True, text=True).stdout
+        self.assertIn("# Generated by app-repack.sh", info)
+        self.assertIn("packager = Grassfield", info)
+        self.assertIn("xdata = pkgtype=pkg", info)
+        self.assertNotIn("packager = t", info)
+        self.assertEqual(info.count("pkgver = "), 1)
+        self.assertRegex(info, r"size = [0-9]+")
+        # The generated dependency lines are the PKGBUILD's.
+        for dep in pkgbuild_vars(self.APP, "depends").split():
+            self.assertIn(f"depend = {dep}\n", info)
+
+    def test_buildinfo_is_clean_text_from_our_pkgbuild(self):
+        members = self.members()
+        for why, new in (("a control byte", b"format = 2\npkgbuild_sha256sum = " + hashlib.sha256((ROOT / self.APP / "PKGBUILD").read_bytes()).hexdigest().encode() + b"\nx = \x1b[2J\n"),
+                         ("another PKGBUILD", b"format = 2\npkgbuild_sha256sum = " + b"3" * 64 + b"\n")):
+            with self.subTest(why):
+                self.refused([(m[0], new) if m[0] == ".BUILDINFO" else (m[0], m[1]) for m in members], why)
+        pkg = self.named(members)
+        self.assertEqual(self.repack(pkg).returncode, 0)
+        build = subprocess.run(["bsdtar", "-xOf", str(self.out / pkg.name), ".BUILDINFO"], capture_output=True, text=True).stdout
+        self.assertEqual(sorted(line.split(" = ")[0] for line in build.splitlines()),
+                         sorted(["format", "pkgname", "pkgbase", "pkgver", "pkgarch", "pkgbuild_sha256sum", "packager", "builddate"]))
+
+    def test_the_output_is_owned_by_root_by_construction(self):
+        pkg = fake_package(self.tmp, self.APP)
+        self.assertEqual(self.repack(pkg).returncode, 0)
+        listing = subprocess.run(["bsdtar", "-tvf", str(self.out / pkg.name)], capture_output=True, text=True).stdout
+        self.assertTrue(all(len(line.split()) > 3 and line.split()[2:4] == ["root", "root"] for line in listing.splitlines()))
+
+    def test_the_libarchive_version_is_recorded(self):
+        r = self.repack(fake_package(self.tmp, self.APP))
+        self.assertIn("libarchive:", r.stdout)
+        self.assertIn("bsdtar", r.stdout)
+
     def test_the_script_runs_only_as_root_in_a_container(self):
         body = text("scripts/app-repack.sh")
         self.assertIn("-f /.dockerenv && $EUID == 0", body)
-        self.assertIn('--no-xattrs --no-acls --no-fflags "${owner[@]}" -p', body)
+        # -p BEFORE the --no-* flags: after them bsdtar's -p switches xattrs, ACLs and flags back on (fourth review).
+        self.assertIn("-p --no-xattrs --no-acls --no-fflags --no-same-owner", body)
+        self.assertNotRegex(body, r"--no-fflags[^\n]*\s-p\b")
+        self.assertIn("--uid 0 --gid 0 --uname root --gname root", body)  # the owner is set at creation, nothing chowns
+        self.assertNotRegex(code(body), r"\bchown -R\b")
+        self.assertIn("setpriv --reuid=65534 --regid=65534 --clear-groups --inh-caps=-all --bounding-set=-all --no-new-privs", body)
         self.assertNotRegex(body, r"bsdtar -[a-zA-Z]*P")
         self.assertNotIn("python", body)
 

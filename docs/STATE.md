@@ -447,6 +447,15 @@ Last updated: 2026-11-09
     `..` path, setuid, world-writable, a foreign owner, .INSTALL. CI's check job on 2c70286 did not start ("workflow file
     issue", 0 jobs): the workflow files are unchanged since the run that passed, no YAML error was found; every workflow
     file is now checked (duplicate keys, job and step shape) by tests/test_workflows.py.
+  - Fourth review of PR #22 (the canonical repack is sound, five fixes): bsdtar's `-p` placed after `--no-xattrs --no-acls
+    --no-fflags` switched them back on (CI's catalog run failed 2 Repack tests as root): `-p` now comes first; the repack
+    parses the untrusted file only unprivileged (setpriv: uid 65534, no capabilities, no_new_privs) after a zstd and ustar magic
+    check, creates the archive with --uid 0 --gid 0 --uname root --gname root (no chown), prints the libarchive version and
+    documents that the pinned image must be refreshed for its security fixes (no job does it: the integrator); path segments
+    are only [A-Za-z0-9._@+-] (a newline name would read back as another database entry); .PKGINFO and .BUILDINFO are
+    generated from our PKGBUILD (`makepkg --printsrcinfo`), the originals only compared (an ESC licence line is refused);
+    the Repack tests that need real xattrs and owners run only as root in a container (CI, or docker through
+    tests/run-in-container.sh) and are reported "NOT VERIFIED" otherwise; fakeroot runs the listing-based ones.
     Open: the app containers keep the network (one container cannot cut it for cargo alone); the legal review of the
     licences is the owner's; a release rebuilds both apps in CI each time.
 

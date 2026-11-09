@@ -57,6 +57,13 @@ throwaway key cannot sign what the release job takes from the bucket); the relea
 as they are (`sign-release.sh prepare --published`). Seeding the build's tree with the published apps is a possible later
 step, with its own review (a package signed by the project's key entering a build that holds none).
 
+## The repack container (bundled apps) and its image
+
+`scripts/app-repack.sh` runs with no network, so no cache or download can reach it, and the libarchive and zstd it uses are
+those of the pinned image (`IMAGE`, an `archlinux:base` digest). They age: refresh the digest when Arch publishes a libarchive
+or zstd security fix (the tracker lists them). No scheduled job does it; the integrator does, in `build.yml` and the other
+files that name the digest (README.md, "Bundled apps"). The version used is printed in the log of each repack step.
+
 ## Compression (point 3)
 
 Arch's `makepkg.conf` already has `COMPRESSZST=(zstd -c -T0 -)`: all cores, level 3. It is now written down in
