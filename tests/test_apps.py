@@ -6,12 +6,14 @@ builds a package, signs anything or needs the network (the real build is CI's bu
 recomputes the pins from the network).
 """
 import hashlib
+import io
 import os
 import pathlib
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -20,7 +22,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import publish  # noqa: E402
 
 APPS = ("grassfield-sanaga", "grassfield-notes")
-HAVE_BSDTAR = shutil.which("bsdtar") is not None
+HAVE_BSDTAR = shutil.which("bsdtar") is not None and shutil.which("zstd") is not None
 
 
 def pkgbuild_vars(app, *names):
@@ -207,48 +209,53 @@ class PinCheck(unittest.TestCase):
 
 
 def fake_package(out, app, pkgbuild=None, extra_paths=(), extra_info="", pkgbuild_sum=None, drop=(), symlink=None,
-                 mode=None):
-    """A package as makepkg would write it for an app folder of this repository, from its real PKGBUILD's values, with
-    the changes a test asks for. Returns its path."""
+                 modes=None, pax=None, owners=None):
+    """A package as makepkg would write it for an app folder of this repository, from its real PKGBUILD's values, with the
+    changes a test asks for: modes {path: mode}, pax {path: {header: value}} (extended attributes, ACLs), owners
+    {path: (uid, gid, uname, gname)}. Written with tarfile in the pax format (a package's own format), then zstd. Returns
+    its path."""
     pkgbuild = pathlib.Path(pkgbuild or ROOT / app / "PKGBUILD")
     name = var(app, "pkgname")
     ver = f"{var(app, 'pkgver')}-{var(app, 'pkgrel')}"
     binary = "sanaga" if app == "grassfield-sanaga" else "grassfield-notes"
-    d = pathlib.Path(out, f"root-{app}-{os.urandom(3).hex()}")
-    d.mkdir(parents=True)
     files = {f"usr/bin/{binary}": "#!/bin/sh\n", f"usr/share/applications/{binary}.desktop": "[Desktop Entry]\n",
              f"usr/share/licenses/{name}/LICENSE": "MIT\n", f"usr/share/icons/hicolor/48x48/apps/{binary}.png": "png"}
     for p in extra_paths:
         files[p] = "x"
     for p in drop:
         files.pop(p, None)
-    for p, content in files.items():
-        f = d / p
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(content)
-        f.chmod(0o755 if p.startswith("usr/bin/") else 0o644)
-    for p in sorted(d.rglob("*")):
-        if p.is_dir():
-            p.chmod(0o755)
-    if symlink:
-        (d / symlink).parent.mkdir(parents=True, exist_ok=True)
-        os.symlink("/etc/passwd", d / symlink)
-    if mode:
-        (d / mode[0]).chmod(mode[1])
     deps = [f"depend = {x}" for x in pkgbuild_vars(app, "depends").split()]
     opt = [f"optdepend = {x}" for x in pkgbuild_vars(app, "optdepends").splitlines() if x]
     prov = [f"provides = {x}" for x in pkgbuild_vars(app, "provides").split()]
     conf = [f"conflict = {x}" for x in pkgbuild_vars(app, "conflicts").split()]
     info = "\n".join([f"pkgname = {name}", f"pkgbase = {name}", f"pkgver = {ver}", "pkgdesc = x", "arch = x86_64",
                       "license = MIT", "builddate = 1", "packager = t", "size = 4"] + deps + opt + prov + conf) + "\n"
-    (d / ".PKGINFO").write_text(info + extra_info)
     digest = pkgbuild_sum or hashlib.sha256(pkgbuild.read_bytes()).hexdigest()
-    (d / ".BUILDINFO").write_text(f"format = 2\npkgname = {name}\npkgbuild_sha256sum = {digest}\n")
-    (d / ".MTREE").write_text("#mtree\n")
+    files[".PKGINFO"] = info + extra_info
+    files[".BUILDINFO"] = f"format = 2\npkgname = {name}\npkgbuild_sha256sum = {digest}\n"
+    files[".MTREE"] = "#mtree\n"
+    modes, pax, owners = modes or {}, pax or {}, owners or {}
+    tmp_tar = pathlib.Path(out, f"{name}-{os.urandom(3).hex()}.tar")
+    folders = sorted({"/".join(p.split("/")[:i]) for p in files for i in range(1, len(p.split("/")))})
+    with tarfile.open(tmp_tar, "w", format=tarfile.PAX_FORMAT) as tar:
+        for path in sorted(set(files) | set(folders)):
+            is_dir = path in folders
+            data = b"" if is_dir else files[path].encode()
+            ti = tarfile.TarInfo(path + "/" if is_dir else path)
+            ti.type = tarfile.DIRTYPE if is_dir else tarfile.REGTYPE
+            ti.size = len(data)
+            ti.mode = modes.get(path, 0o755 if is_dir or path.startswith("usr/bin/") else 0o644)
+            ti.uid, ti.gid, ti.uname, ti.gname = owners.get(path, (0, 0, "root", "root"))
+            ti.mtime = 0
+            ti.pax_headers = dict(pax.get(path, {}))
+            tar.addfile(ti, io.BytesIO(data) if not is_dir else None)
+        if symlink:
+            ti = tarfile.TarInfo(symlink)
+            ti.type, ti.linkname, ti.uid, ti.gid, ti.uname, ti.gname, ti.mode = tarfile.SYMTYPE, "/etc/passwd", 0, 0, "root", "root", 0o777
+            tar.addfile(ti)
     package = pathlib.Path(out, f"{name}-{ver}-x86_64.pkg.tar.zst")
-    top = sorted(x.name for x in d.iterdir())
-    subprocess.run(["bsdtar", "--zstd", "-cf", str(package), "-C", str(d)] + top, check=True)
-    shutil.rmtree(d)
+    subprocess.run(["zstd", "-q", "-f", "-o", str(package), str(tmp_tar)], check=True)
+    tmp_tar.unlink()
     return package
 
 
@@ -282,14 +289,70 @@ class AppCheck(unittest.TestCase):
             "a file in /etc": dict(extra_paths=["etc/pacman.d/hook"]),
             "a unit under usr/lib": dict(extra_paths=["usr/lib/systemd/system/x.service"]),
             "a folder under usr/bin": dict(extra_paths=["usr/bin/dir/x"]),
-            "a link": dict(symlink="usr/share/doc/link"),
-            "a setuid binary": dict(mode=("usr/bin/grassfield-notes", 0o4755)),
+            # Review of the fixes, finding 3: only the app's own binary, .desktop and licences folder.
+            "another binary in usr/bin (snapper)": dict(extra_paths=["usr/bin/snapper"]),
+            "another .desktop file": dict(extra_paths=["usr/share/applications/evil.desktop"]),
+            "another app's licences folder": dict(extra_paths=["usr/share/licenses/pacman/LICENSE"]),
+            "a file in usr/share/doc": dict(extra_paths=["usr/share/doc/grassfield-notes/README"]),
+            "another icon name": dict(extra_paths=["usr/share/icons/hicolor/48x48/apps/other.png"]),
+            "a link": dict(symlink="usr/share/licenses/grassfield-notes/link"),
             "no binary": dict(drop=["usr/bin/grassfield-notes"]),
             "no desktop file": dict(drop=["usr/share/applications/grassfield-notes.desktop"]),
         }
         for why, kw in cases.items():
             with self.subTest(why):
                 r = self.check(fake_package(self.tmp, "grassfield-notes", **kw))
+                self.assertEqual(r.returncode, 1, r.stderr)
+
+    BIN = "usr/bin/grassfield-notes"
+
+    def test_what_a_listing_cannot_show_is_refused(self):
+        """Review of the fixes, finding 1: pacman restores file capabilities from the archive's pax headers, with no install
+        script. bsdtar -tv prints a plain -rwxr-xr-x root root for such a file; the members are read by tarfile."""
+        cases = {
+            "a file capability (cap_setuid+ep)": dict(pax={self.BIN: {"SCHILY.xattr.security.capability": "\x01\x00\x00\x02"}}),
+            "a libarchive-spelled capability": dict(pax={self.BIN: {"LIBARCHIVE.xattr.security.capability": "AQAAAg=="}}),
+            "a POSIX ACL": dict(pax={self.BIN: {"SCHILY.acl.access": "user::rwx,user:builder:rwx,group::r-x,mask::rwx,other::r-x"}}),
+            "file flags": dict(pax={self.BIN: {"SCHILY.fflags": "nodump"}}),
+            "a non-root owner": dict(owners={self.BIN: (1000, 1000, "builder", "builder")}),
+            "a non-root group alone": dict(owners={self.BIN: (0, 100, "root", "users")}),
+            "a setuid bit": dict(modes={self.BIN: 0o4755}),
+            "a setgid bit": dict(modes={self.BIN: 0o2755}),
+            "a sticky bit": dict(modes={"usr/share/licenses/grassfield-notes": 0o1755}),
+            "a world-writable file": dict(modes={"usr/share/licenses/grassfield-notes/LICENSE": 0o666}),
+            "a group-writable folder": dict(modes={"usr/share": 0o775}),
+        }
+        for why, kw in cases.items():
+            with self.subTest(why):
+                pkg = fake_package(self.tmp, "grassfield-notes", **kw)
+                for python in (True, False):
+                    env = dict(os.environ) if python else dict(os.environ, APP_CHECK_NO_PYTHON="1")
+                    r = subprocess.run([str(ROOT / "scripts" / "app-check.sh"), str(pkg), str(ROOT / "grassfield-notes")],
+                                       capture_output=True, text=True, env=env)
+                    self.assertEqual(r.returncode, 1, f"python={python}: {r.stderr}")
+
+    def test_a_clean_package_passes_with_and_without_python(self):
+        pkg = fake_package(self.tmp, "grassfield-notes")
+        for env in (dict(os.environ), dict(os.environ, APP_CHECK_NO_PYTHON="1")):
+            r = subprocess.run([str(ROOT / "scripts" / "app-check.sh"), str(pkg), str(ROOT / "grassfield-notes")],
+                               capture_output=True, text=True, env=env)
+            self.assertEqual((r.returncode, r.stderr), (0, ""))
+
+    def test_the_tar_parser_names_the_header(self):
+        pkg = fake_package(self.tmp, "grassfield-notes", pax={self.BIN: {"SCHILY.xattr.security.capability": "x"}})
+        r = subprocess.run(["python3", "-I", str(ROOT / "scripts" / "pkg-members.py"), str(pkg)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("SCHILY.xattr.security.capability", r.stderr)
+        # The listing the old gate relied on shows nothing wrong about the same package.
+        listing = subprocess.run(["bsdtar", "-tvf", str(pkg)], capture_output=True, text=True).stdout
+        self.assertRegex(listing, r"-rwxr-xr-x\s+0 root\s+root\s+\d+ .* usr/bin/grassfield-notes")
+
+    def test_a_repeated_single_valued_key_is_refused(self):
+        for key, line in (("pkgver", "pkgver = 999-1"), ("pkgname", "pkgname = grassfield-desktop"), ("arch", "arch = any"),
+                          ("size", "size = 1"), ("pkgbase", "pkgbase = grassfield-desktop"), ("pkgdesc again", "pkgdesc = y"),
+                          ("a command substitution", "pkgdesc = $(id)")):
+            with self.subTest(key):
+                r = self.check(fake_package(self.tmp, "grassfield-notes", extra_info=line + "\n"))
                 self.assertEqual(r.returncode, 1, r.stderr)
 
     def test_pkginfo_fields_and_dependency_lines_are_the_pkgbuilds(self):
@@ -491,19 +554,81 @@ class BuildChannel(unittest.TestCase):
 class SignRelease(unittest.TestCase):
     """Review of PR #22, finding 4: a published package must still be the PKGBUILD's."""
 
-    def test_prepare_checks_the_apps_it_ships_against_git(self):
-        body = text("scripts/sign-release.sh")
-        prepare = body[body.index("if [[ $mode == prepare ]]"):body.index("# sign: gpg only")]
-        self.assertIn('"$self/app-check.sh" "${found[0]}" "$self/../$app"', prepare)
-        # After the published package replaced the new build, before repo-add reads it.
-        self.assertLess(prepare.index("the published file and its signature"), prepare.index("app-check.sh"))
-        self.assertLess(prepare.index("app-check.sh"), prepare.index("repo-add --quiet"))
-
     def test_the_apps_names_pass_the_signers_allowlist_as_they_did(self):
         package = re.search(r"^PACKAGE='(.*)'$", text("scripts/sign-release.sh"), re.M).group(1)
         for name in APPS:
             ok = subprocess.run(["bash", "-c", '[[ $1 =~ $2 ]]', "_", f"{name}-1.0.0.r24.g2daf1c8-1-x86_64.pkg.tar.zst", package]).returncode
             self.assertEqual(ok, 0)
+
+
+@unittest.skipUnless(HAVE_BSDTAR, "needs bsdtar and zstd")
+class ReleaseApps(unittest.TestCase):
+    """scripts/release-apps-check.sh, what sign-release.sh prepare runs (review of the fixes, finding 6)."""
+
+    def setUp(self):
+        self.rel = pathlib.Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.rel)
+
+    def desktop(self, depends):
+        """A fake grassfield-desktop package with these depend lines (a bare .PKGINFO)."""
+        d = pathlib.Path(self.rel, "d")
+        d.mkdir()
+        (d / ".PKGINFO").write_text("pkgname = grassfield-desktop\npkgver = 1.0.0-1\n" + "".join(f"depend = {x}\n" for x in depends))
+        out = self.rel / "grassfield-desktop-1.0.0-1-x86_64.pkg.tar.zst"
+        subprocess.run(["bsdtar", "--zstd", "-cf", str(out), "-C", str(d), ".PKGINFO"], check=True)
+        shutil.rmtree(d)
+
+    def run_check(self):
+        return subprocess.run([str(ROOT / "scripts" / "release-apps-check.sh"), str(self.rel)], capture_output=True, text=True)
+
+    def test_a_release_with_both_apps_and_a_desktop_that_depends_on_them_passes(self):
+        fake_package(self.rel, "grassfield-sanaga")
+        fake_package(self.rel, "grassfield-notes")
+        self.desktop(["grassfield-keyring", "grassfield-sanaga", "grassfield-notes"])
+        r = self.run_check()
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+
+    def test_a_missing_app_is_refused_when_the_desktop_depends_on_it(self):
+        fake_package(self.rel, "grassfield-notes")
+        self.desktop(["grassfield-sanaga", "grassfield-notes"])
+        r = self.run_check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("depends on grassfield-sanaga, which this release does not hold", r.stderr)
+        # Either spelling of the browser's dependency counts.
+        shutil.rmtree(self.rel)
+        self.setUp()
+        fake_package(self.rel, "grassfield-notes")
+        self.desktop(["sanaga"])
+        self.assertEqual(self.run_check().returncode, 1)
+
+    def test_a_release_before_the_apps_needs_none(self):
+        self.desktop(["grassfield-keyring"])
+        self.assertEqual(self.run_check().returncode, 0)
+
+    def test_an_app_is_found_by_its_pkginfo_name_not_its_file_name(self):
+        pkg = fake_package(self.rel, "grassfield-sanaga", extra_paths=[".INSTALL"])
+        pkg.rename(self.rel / "something-else-1-x86_64.pkg.tar.zst")
+        r = self.run_check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("is not what grassfield-sanaga/PKGBUILD builds", r.stderr)
+
+    def test_a_published_package_of_another_pkgbuild_is_refused(self):
+        fake_package(self.rel, "grassfield-sanaga", pkgbuild_sum="2" * 64)
+        self.assertEqual(self.run_check().returncode, 1)
+
+    def test_two_packages_of_one_app_are_refused(self):
+        fake_package(self.rel, "grassfield-notes")
+        shutil.copy(self.rel / next(f for f in os.listdir(self.rel)), self.rel / "copy-x86_64.pkg.tar.zst")
+        self.assertEqual(self.run_check().returncode, 1)
+
+    def test_sign_release_prepare_runs_it_after_the_published_swap(self):
+        body = text("scripts/sign-release.sh")
+        prepare = body[body.index("if [[ $mode == prepare ]]"):body.index("# sign: gpg only")]
+        self.assertIn('"$self/release-apps-check.sh" .', prepare)
+        self.assertLess(prepare.index("the published file and its signature"), prepare.index("release-apps-check.sh"))
+        self.assertLess(prepare.index("release-apps-check.sh"), prepare.index("repo-add --quiet"))
 
 
 class Bump(unittest.TestCase):
@@ -549,6 +674,9 @@ class SmokeTest(unittest.TestCase):
         self.assertIn("grassfield-sanaga", body)
         self.assertIn("grassfield-notes", body)
         self.assertIn("Installed as a dependency for another package", body)
+        # The branch that proves the depends resolve is taken for a desktop that depends on the apps by their package names.
+        self.assertIn('*" grassfield-sanaga "* && " $desktop_deps " == *" grassfield-notes "*', body)
+        self.assertNotIn('*" sanaga "*', body)
         self.assertIn("/usr/share/applications/sanaga.desktop", body)
         self.assertIn("pacman -Rns --noconfirm grassfield-desktop grassfield-compositor grassfield-icons grassfield-sanaga grassfield-notes", body)
 

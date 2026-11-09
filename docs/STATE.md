@@ -429,6 +429,13 @@ Last updated: 2026-11-09
     replaces=; `sign-release.sh prepare` runs `app-check.sh` on the release's apps (a published package cannot hide a
     changed PKGBUILD); CI runs `bump-app.sh --verify` (catalog.yml and in each app container); smoke.sh checks
     `pacman -Qq sanaga` names grassfield-sanaga; each package ships THIRD-PARTY-LICENSES.txt and the font licence texts.
+  - Re-review of PR #22 (FAIL on the package gate) fixed: `app-check.sh` reads the members with `scripts/pkg-members.py`
+    (Python tarfile on the zstd stream: refuses any pax header such as security.capability, ACLs and flags, non-root owners,
+    setuid, setgid, sticky, group- or world-writable modes, and every type but file and folder; a stream scan where python3 is
+    absent), requires exactly the app's own paths (one binary, its .desktop, icons, metainfo, licences; no usr/share/doc),
+    one line per single-valued .PKGINFO key; `release-apps-check.sh` (sign-release prepare) selects apps by .PKGINFO name and
+    refuses a release whose desktop depends on an app it lacks; smoke.sh looks for the desktop's depends on
+    grassfield-sanaga and grassfield-notes; README lists the libalpm hooks that can match and why they are accepted.
     Open: the app containers keep the network (one container cannot cut it for cargo alone); the legal review of the
     licences is the owner's; a release rebuilds both apps in CI each time.
 

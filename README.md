@@ -37,7 +37,7 @@ catalog of Grassfield Store.
 | `tools/catalog.py` | validates the sources, checks them against what they name, builds, signs and verifies the catalog (standard library) |
 | `tools/catalog-facts.sh` | gathers those facts in a throwaway Arch container: Omarchy's stable mirror, Arch's AppStream, Flathub |
 | `scripts/build-channel.sh` | one Grassfield tag or commit, built once → makepkg of grassfield's own PKGBUILD → signed packages → its **release build** for each channel it goes to (`releases/<channel>/<version>/`: packages, a database of this release alone, release notes, all signed), which the publisher reads → the channel tree made from them by `tools/publish.py`, for CI's artifact and the tests; grassfield-keyring is built once per version (reused only while it is still `keyring/`'s, the whole package); grassfield-sanaga and grassfield-notes come from `--apps`, built beforehand in a container each by `build-app.sh`, checked by `app-check.sh`, and reused from the tree when signed by the key and built from the very PKGBUILD in git; a release whose grassfield-desktop does not depend on grassfield-keyring is refused (grassfield ADR-0033 O22); throwaway keys only (it refuses to start beside the project's key) |
-| `scripts/bump-app.sh`, `scripts/app-check.sh` | `bump-app.sh <app> <commit>` moves an app's pin in one step (`--verify <app>` recomputes it from the network); `pin-check.sh` refuses an unpinned PKGBUILD; `build-app.sh` builds one app in its own container; `app-check.sh` and `app-ingest.sh` are the gate and the reuse rule between that container and the one that signs |
+| `scripts/bump-app.sh`, `scripts/app-check.sh` | `bump-app.sh <app> <commit>` moves an app's pin in one step (`--verify <app>` recomputes it from the network); `pin-check.sh` refuses an unpinned PKGBUILD; `build-app.sh` builds one app in its own container; `app-check.sh` (with `pkg-members.py`), `app-ingest.sh` and `release-apps-check.sh` are the gate and the reuse rule between that container and the one that signs |
 | `scripts/omarchy-trust.sh` | `[omarchy]`'s package signer trusted in a throwaway container's pacman keyring as an Omarchy machine trusts it: the fingerprint Omarchy pins, the key fetched over HTTPS from keys.openpgp.org and used only if it is that one key alone; one step for `build-channel.sh` and `tests/smoke.sh` |
 | `scripts/sign-release.sh` | a tested release build signed with the project's key (the `release` job, disabled), in two steps so the key never meets anything that reads package contents: `prepare` without the key (a package already published used as it is, the keyring compared with `keyring/`, `repo-add`), `sign` with gpg only, on an allowlist of names |
 | `scripts/notes.py` | `grassfield-notes.json` from grassfield's `packaging/release-notes/<VERSION>.{en,fr}.txt`, with the channel's earlier releases from the tag's own repository |
@@ -101,14 +101,33 @@ depends on them (grassfield ADR-0055).
   the same version, count and checksum, and reads the app's diff between the two commits. Any other edit of a
   `PKGBUILD` is a new `pkgrel`.
 - **What the desktop's container takes.** `build-channel.sh --apps DIR` never builds or runs an app: `scripts/app-ingest.sh`
-  takes the one file the PKGBUILD names, after `scripts/app-check.sh` passed it: a pinned PKGBUILD, only `.PKGINFO`,
-  `.BUILDINFO`, `.MTREE` and files under `usr/bin`, `usr/share/{applications,icons,licenses,metainfo,doc}` (so no `.INSTALL`, no
-  libalpm hook, no link, no setuid bit), the PKGBUILD's own dependency lines, and a `.BUILDINFO` recording the SHA-256 of this
-  very `PKGBUILD`. It signs the file and installs it with `--noscriptlet` for the desktop's `makepkg -s`; nothing of it runs.
+  takes the one file the PKGBUILD names, after `scripts/app-check.sh` passed it. The container that built it ran third-party
+  code and could have rewritten the package file, so the gate checks what a client's pacman would act on:
+  - the paths are exactly the app's own (`usr/bin/<its binary>` alone, its `.desktop`, its hicolor icons, its metainfo, its
+    licences folder; no `.INSTALL`, no hook, no other binary, no `usr/share/doc`);
+  - every member is a regular file or a folder, owned by root, with no setuid, setgid or sticky bit and no group- or
+    world-writable mode, and **no pax extension at all**: pacman restores file capabilities (`security.capability`), ACLs and
+    flags from the archive without any install script, and `bsdtar -tv` does not print them, so `scripts/pkg-members.py`
+    reads the members with Python's `tarfile` (where python3 is absent, in `sign-release.sh prepare`'s bare, network-less
+    container, the decompressed stream is scanned for such headers instead);
+  - one line for each single-valued `.PKGINFO` key (repo-add keeps the last), the PKGBUILD's own dependency lines, and a
+    `.BUILDINFO` recording the SHA-256 of this very `PKGBUILD`.
+  It signs the file and installs it with `--noscriptlet`, so no scriptlet runs; **libalpm hooks still run**, as root, over
+  the app's data, in the desktop's container and on a client. With the paths above, the stock hooks that can match are
+  only these: `gtk-update-icon-cache` (`usr/share/icons/*/`, writes `icon-theme.cache` for the hicolor folder) and
+  `update-desktop-database` (`usr/share/applications/*.desktop`, writes `mimeinfo.cache` from the `MimeType=` lines). Both are
+  stock Arch hooks that every desktop application triggers, parse the app's PNG, SVG and `.desktop` data with their own
+  parsers and write only their caches; accepted. No path of the allowlist matches the hooks for MIME packages, fonts, schemas,
+  AppStream catalogs (`usr/share/swcatalog`, not `usr/share/metainfo`), systemd, udev, depmod or ldconfig, and the packages
+  of a client's own system-wide hooks that fire for every package (`Target = *`, such as Omarchy's update guard) never read
+  a package's contents. `app-check.sh` itself parses the untrusted archive, as root, with bsdtar, zstd and Python, and
+  extracts nothing.
 - **Reuse.** A package of the same name already in the tree is used again, with its signature, only if the key signed it and
   `app-check.sh` finds it built from this very `PKGBUILD`; a changed `PKGBUILD` without a new `pkgrel` stops the build, and so
-  does `sign-release.sh prepare`: it runs `app-check.sh` on the app packages of the release, so the published package of
-  the same name that replaces a new build cannot hide a changed `PKGBUILD`. `--no-apps` exists for the end-to-end test of
+  does `sign-release.sh prepare`: `release-apps-check.sh` runs `app-check.sh` on every package of the release whose
+  `.PKGINFO` names an app, so the published package of the same name that replaces a new build cannot hide a changed
+  `PKGBUILD`, and it refuses a release whose `grassfield-desktop` depends on an app the release does not hold (publish.py would
+  otherwise drop the app from the channel and every client's `-Syu` would fail). `--no-apps` exists for the end-to-end test of
   older refs only.
 - **CI** runs `bump-app.sh --verify` for both apps (the pin is on the app's `main`, the checksum is GitHub's) in the check
   job and again in each app's container.
