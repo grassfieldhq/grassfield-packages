@@ -11,7 +11,9 @@ import os
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
+import zlib
 import sys
 import tarfile
 import tempfile
@@ -853,27 +855,58 @@ class Repack(unittest.TestCase):
                     "usr/share/licenses/grassfield-notes//x", "usr/share/.hidden/", "usr/.PKGINFO", ".INSTALL", ""):
             self.assertEqual(rule(bad), 1, repr(bad))
 
-    def test_magic_bytes_come_before_any_other_reader(self):
+    def zstd_of(self, why, data):
+        """A file named as the package, holding `data` under a zstd frame, in its own folder."""
         name = f"{self.APP}-{var(self.APP, 'pkgver')}-{var(self.APP, 'pkgrel')}-x86_64.pkg.tar.zst"
-        # A cpio archive and a zip, zstd-compressed (libarchive would read both), a plain tar not compressed at all.
-        inputs = {}
-        raw = self.tmp / "raw"
-        raw.write_bytes(b"070701" + b"0" * 200)
-        inputs["cpio under zstd"] = raw
-        for why, path in inputs.items():
-            comp = self.tmp / f"{why.replace(' ', '_')}.zst"
-            subprocess.run(["zstd", "-q", "-f", "-o", str(comp), str(path)], check=True)
-            dest = self.tmp / why.replace(" ", "_") / name
-            dest.parent.mkdir()
-            shutil.copy(comp, dest)
-            r = self.repack(dest)
-            self.assertEqual(r.returncode, 1, why)
-            self.assertIn("not a tar archive", r.stderr)
-        tar_plain = self.tmp / "plain" / name
-        tar_plain.parent.mkdir()
-        tar_plain.write_bytes(tar_block("x", b"x") + b"\0" * 1024)
-        r = self.repack(tar_plain)
-        self.assertEqual((r.returncode, "not a zstd frame" in r.stderr), (1, True))
+        d = self.tmp / why.replace(" ", "_")
+        d.mkdir()
+        (d / "raw").write_bytes(data)
+        subprocess.run(["zstd", "-q", "-f", "-o", str(d / name), str(d / "raw")], check=True)
+        return d / name
+
+    def test_only_a_plain_tar_behind_the_zstd_frame_is_parsed(self):
+        """Fifth review: libarchive reads whatever format bids highest; a tar polyglot or a compressed archive inside the zstd
+        frame must be refused before any extraction."""
+        good = fake_package(self.tmp, self.APP)
+        members = read_members(good)
+        tar_bytes = subprocess.run(["zstd", "-dc", "--", str(good)], capture_output=True).stdout
+        # cpio in gzip in zstd
+        cpio_src = self.tmp / "cpio_src"
+        (cpio_src / "usr/bin").mkdir(parents=True)
+        (cpio_src / "usr/bin" / self.APP).write_text("x")
+        cpio = subprocess.run(["bsdtar", "--format", "newc", "-cf", "-", "-C", str(cpio_src), "usr"], capture_output=True).stdout
+        gz_cpio = subprocess.run(["gzip", "-c", "-n"], input=cpio, capture_output=True).stdout
+        # The review's polyglot: a gzip header whose extra field carries "ustar" at byte 257 (and padded to 512).
+        extra = bytearray(b"\0" * 300)
+        extra[245:250] = b"ustar"
+        co = zlib.compressobj(9, zlib.DEFLATED, -15)
+        deflated = co.compress(cpio) + co.flush()
+        poly = b"\x1f\x8b\x08\x04\0\0\0\0\0\xff" + struct.pack("<H", len(extra)) + bytes(extra) + deflated + \
+            struct.pack("<II", zlib.crc32(cpio), len(cpio))
+        poly += b"\0" * (-len(poly) % 512)
+        self.assertEqual(poly[257:262], b"ustar")
+        gz_tar = subprocess.run(["gzip", "-c", "-n"], input=tar_bytes, capture_output=True).stdout
+        cases = {"cpio in gzip in zstd": gz_cpio, "the polyglot gzip with ustar at 257": poly, "a gzip tar in zstd": gz_tar,
+                 "a cpio in zstd": cpio, "a zip in zstd": subprocess.run(["bsdtar", "--format", "zip", "-cf", "-", "-C", str(cpio_src), "usr"], capture_output=True).stdout,
+                 "a tar with a bad header checksum": tar_bytes[:148] + b"000001\0 " + tar_bytes[156:]}
+        for why, data in cases.items():
+            with self.subTest(why):
+                pkg = self.zstd_of(why, data)
+                r = self.repack(pkg)
+                self.assertEqual(r.returncode, 1, f"{why}: {r.stdout}{r.stderr}")
+                self.assertEqual(list(self.out.iterdir()), [], why)
+        # The plain zstd tar of a good package is the one accepted form.
+        r = self.repack(good)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(members[0][0], ".BUILDINFO")
+
+    def test_the_first_header_must_be_a_valid_tar_header(self):
+        body = text("scripts/app-repack.sh")
+        self.assertIn("zstd -d -q --no-progress -c", body)
+        self.assertIn("ustar", body)
+        self.assertIn("GNU tar and libarchive do not list the same members", body)
+        # libarchive is only ever handed the plain tar, never the file that arrived.
+        self.assertNotRegex(code(body), r'bsdtar -[a-z]*\s+(-f\s+)?"\$in"')
 
     def test_pkginfo_is_generated_from_the_pkgbuild_and_the_original_only_compared(self):
         # An ESC sequence in the licence line: the original differs from what the PKGBUILD says, so the package is refused.
@@ -922,6 +955,47 @@ class Repack(unittest.TestCase):
         r = self.repack(fake_package(self.tmp, self.APP))
         self.assertIn("libarchive:", r.stdout)
         self.assertIn("bsdtar", r.stdout)
+
+    def reverify(self, pkg):
+        return subprocess.run(repack_command() + [str(ROOT / "scripts" / "app-reverify.sh"), "--app", self.APP, "--in", str(pkg)],
+                              capture_output=True, text=True)
+
+    def test_a_repacked_package_is_its_own_repack_and_a_tampered_one_is_refused(self):
+        """Fifth review: the signed file must not depend on the repack container alone; where it is signed, the file is repacked
+        again and must be identical."""
+        pkg = fake_package(self.tmp, self.APP)
+        self.assertEqual(self.repack(pkg).returncode, 0)
+        good = self.out / pkg.name
+        r = self.reverify(good)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, f"reverified {pkg.name}"), r.stderr)
+        members = read_members(good)
+        variants = {
+            # canonical content, but not the canonical bytes: another mtime (the repack sets them all to the build date)
+            "a changed mtime": raw_package(self.tmp, members),
+            # an extended attribute on the binary, which a root install on a client would apply
+            "an added xattr": raw_package(self.tmp, [(p, d, {"mode": 0o755, "pax": {"SCHILY.xattr.security.capability": "x"}}) if p == self.BIN else (p, d) for p, d in members]),
+            "an added member": raw_package(self.tmp, members + [("usr/share/licenses/grassfield-notes/EXTRA", b"x")]),
+        }
+        broken = bytearray(good.read_bytes())
+        broken[len(broken) // 2] ^= 0xFF
+        for why, path in list(variants.items()) + [("a flipped byte in the stream", None)]:
+            with self.subTest(why):
+                d = self.tmp / ("v-" + why.replace(" ", "_"))
+                d.mkdir()
+                target = d / pkg.name
+                if path is None:
+                    target.write_bytes(bytes(broken))
+                else:
+                    shutil.copy(path, target)
+                r = self.reverify(target)
+                self.assertEqual(r.returncode, 1, f"{why}: {r.stdout}{r.stderr}")
+
+    def test_the_channel_script_reverifies_before_it_signs(self):
+        body = text("scripts/build-channel.sh")
+        ingest = body[body.index("ingest_app() {"):body.index("mkdir -p /build/apps\n")]
+        self.assertIn('app-reverify.sh" --app "$name" --in "$pkg"', ingest)
+        self.assertLess(ingest.index("app-reverify.sh"), ingest.index('sign "$pkg"'))
+        self.assertLess(ingest.index("app-reverify.sh"), ingest.index("pacman -U --noscriptlet"))
 
     def test_the_script_runs_only_as_root_in_a_container(self):
         body = text("scripts/app-repack.sh")

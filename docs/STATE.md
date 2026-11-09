@@ -456,6 +456,11 @@ Last updated: 2026-11-09
     generated from our PKGBUILD (`makepkg --printsrcinfo`), the originals only compared (an ESC licence line is refused);
     the Repack tests that need real xattrs and owners run only as root in a container (CI, or docker through
     tests/run-in-container.sh) and are reported "NOT VERIFIED" otherwise; fakeroot runs the listing-based ones.
+  - Fifth review of PR #22 (PASS, two follow-ups): the repack's step 0 now decompresses with zstd alone to a plain file and
+    requires a real tar (size multiple of 512 under a cap, valid checksum on the first header, ustar at offset 257, GNU tar
+    listing the same members), so no cpio, zip, 7-Zip or compressed archive inside the zstd frame reaches libarchive; and
+    scripts/app-reverify.sh (called by build-channel.sh before signing, in the desktop's container) repacks the repacked file again
+    and refuses any difference, so the signed file does not rest on the repack container alone.
     Open: the app containers keep the network (one container cannot cut it for cargo alone); the legal review of the
     licences is the owner's; a release rebuilds both apps in CI each time.
 

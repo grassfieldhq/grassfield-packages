@@ -105,8 +105,9 @@ depends on them (grassfield ADR-0055).
   libarchive accepts, a second `.PKGINFO` member is read by one reader and not by repo-add, a SIGPIPE inverts a `grep`. So
   `scripts/app-repack.sh` runs in a third container, with no network and only this repository, the package (read-only) and
   an output folder:
-  0. magic bytes first: a zstd frame, then a tar header (ustar or pax), before any other reader sees the file (libarchive would
-     read a cpio, zip or 7-Zip file named `.pkg.tar.zst`);
+  0. which format is parsed: zstd alone decompresses the file to a plain one (under a size cap) and that must BE a tar, a valid
+     checksum on its first 512-byte header and `ustar` at offset 257 (libarchive reads whatever format bids highest: a cpio, zip or
+     7-Zip file, or a compressed one, named `.pkg.tar.zst` must never reach it); GNU tar must list the same members;
   1. `bsdtar -tf` lists the members: no path twice (`.PKGINFO` included), every path the app's own
      (`scripts/app-lib.sh`: `usr/bin/<its binary>` alone, its `.desktop`, its hicolor icons, its metainfo, its licences
      folder; no `.INSTALL`, no hook, no other binary, no `usr/share/doc`), every segment of only `[A-Za-z0-9._@+-]` (no space,
@@ -138,6 +139,9 @@ depends on them (grassfield ADR-0055).
   after reading Arch's security tracker for libarchive and zstd, and check the image's `bsdtar --version`, printed at the
   top of the repack step's log); a scheduled check of the image's age or of the tracker would be the automation, and is not
   built.
+  A second pass follows where the package is signed: `scripts/app-reverify.sh`, in the desktop's container (the same image), repacks
+  the repacked file again and requires it to be identical byte for byte (the repack is deterministic, so a canonical package is
+  its own fixed point), so the signed file does not depend on the repack container alone.
   Only that repacked file goes on: `build-channel.sh --apps DIR` takes it through `scripts/app-ingest.sh` and `scripts/app-check.sh`
   (a second check: pinned PKGBUILD, the same paths, no path or `.PKGINFO`, `.BUILDINFO` or `.MTREE` member twice, root owner and
   plain modes, one line for each single-valued `.PKGINFO` key, the PKGBUILD's own dependency lines, a `.BUILDINFO` recording
