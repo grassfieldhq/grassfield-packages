@@ -127,7 +127,7 @@ install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 # order under --noconfirm): qt6-webengine's ttf-font would be [omarchy]'s 152 MB maplemono-nf-cn. A font of [extra] is
 # installed first; mesa is opengl-driver's provider because every depends array names it first. Which packages came from
 # [omarchy] is printed after makepkg.
-base_set=(base-devel git diffutils ttf-dejavu)
+base_set=(base-devel git diffutils ttf-dejavu python)  # python: scripts/app-check.sh reads the apps' pax headers
 [[ -z $ccache_dir ]] || base_set+=(ccache)
 pacman -Syu --noconfirm --needed "${base_set[@]}" >>"$log" 2>&1 ||
   die "pacman -Syu ${base_set[*]} (see $log)"
@@ -228,7 +228,7 @@ ingest_app() { # package folder name -> its package in /build/apps/<name>/, sign
     sign "$pkg"
   fi
   # Installed for grassfield-desktop's makepkg -s, from a copy without its .sig (pacman checks a signature found beside a
-  # file, and this machine does not trust the key), with --noscriptlet: nothing of the package runs here.
+  # file, and this machine does not trust the key), with --noscriptlet: no scriptlet of the package runs here (stock libalpm hooks over its icons and .desktop file still do: README).
   cp "$pkg" /build/unsigned/ && pacman -U --noscriptlet --noconfirm "/build/unsigned/${pkg##*/}" >>"$log" 2>&1 || die "install of $name (see $log)"
   shipped+=("$pkg")
   app_versions+=("$name-$av")

@@ -41,7 +41,7 @@ echo "== the package set of an Omarchy stable machine (build/pacman.conf), as bu
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 { pacman-key --init && pacman-key --populate archlinux; } >>"$log" 2>&1 || die "pacman-key (see $log)"
 "$here/scripts/omarchy-trust.sh" 2>>"$log" || die "cannot trust [omarchy]'s signer (see $log)"
-pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu >>"$log" 2>&1 || { tail -n 20 "$log"; die "pacman -Syu (see $log)"; }
+pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu python >>"$log" 2>&1 || { tail -n 20 "$log"; die "pacman -Syu (see $log)"; }
 mkdir -p /etc/makepkg.conf.d
 printf 'COMPRESSZST=(zstd -c -T0 -3 -)\n' >/etc/makepkg.conf.d/grassfield.conf
 
