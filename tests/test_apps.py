@@ -677,7 +677,7 @@ class RepackAsRootInAContainer(unittest.TestCase):
     """The reference run: the Repack tests as real root in a throwaway Arch container (tests/run-in-container.sh)."""
 
     def test_the_repack_suite_passes_as_root(self):
-        env = dict(os.environ, GRASSFIELD_UNITTEST_ARGS="-p test_apps.py -k Repack")
+        env = dict(os.environ, GRASSFIELD_UNITTEST_ARGS="-p test_apps.py -k Repack.")
         r = subprocess.run([str(ROOT / "tests" / "run-in-container.sh"), "-e", "GRASSFIELD_UNITTEST_ARGS"], env=env,
                            capture_output=True, text=True, timeout=1500)
         self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-1500:])
