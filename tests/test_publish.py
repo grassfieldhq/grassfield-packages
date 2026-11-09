@@ -261,6 +261,32 @@ class Publisher(unittest.TestCase):
             self.run_once(now=1793099999)
         self.assertIn("grassfield-icons 1.0.0-1, older than the published 1.0.1-1", str(e.exception))
 
+    def test_bundled_apps_are_published_kept_and_never_go_backwards(self):
+        """grassfield-sanaga and grassfield-notes (grassfield ADR-0055) are packages of the release like the others: in the
+        snapshot's database, immutable names in the channel, kept by a catalog update, and never older than the published."""
+        apps = {"grassfield-sanaga": "0.4.0.r79.ga9e0e56-1", "grassfield-notes": "1.0.0.r24.g2daf1c8-1"}
+        both = lambda v, **apps_: {"grassfield-desktop": v, "grassfield-icons": v, **{**apps, **apps_}}
+        self.release("1.0.0-1", both("1.0.0-1"))
+        first, _ = self.run_once()
+        db = publish.db_versions(self.store.snapshot_path(first, "grassfield.db"))
+        for name, version in apps.items():
+            self.assertEqual(db.get(name), version)
+            self.assertTrue(os.path.exists(os.path.join(self.store.base, f"{name}-{version}-x86_64.pkg.tar.zst")))
+            self.assertTrue(os.path.exists(os.path.join(self.store.base, f"{name}-{version}-x86_64.pkg.tar.zst.sig")))
+        # A catalog update keeps them (the database is the same file).
+        second, _ = self.run_once(self.catalog(100), now=1793095300)
+        self.assertEqual(publish.db_versions(self.store.snapshot_path(second, "grassfield.db")), db)
+        # A bump (more commits, the same Cargo version) is newer: r80 above r79 under vercmp.
+        self.release("1.0.1-1", both("1.0.1-1", **{"grassfield-sanaga": "0.4.0.r80.g1234567-1"}))
+        third, _ = self.run_once(self.catalog(100), now=1793095400)
+        self.assertEqual(publish.db_versions(self.store.snapshot_path(third, "grassfield.db"))["grassfield-sanaga"],
+                         "0.4.0.r80.g1234567-1")
+        # An older pin, in a later release, is refused: the publisher never puts an older package back.
+        self.release("1.0.2-1", both("1.0.2-1", **{"grassfield-sanaga": "0.4.0.r79.ga9e0e56-1"}))
+        with self.assertRaises(publish.Refused) as e:
+            self.run_once(self.catalog(100), now=1793099999)
+        self.assertIn("grassfield-sanaga 0.4.0.r79.ga9e0e56-1, older than the published 0.4.0.r80.g1234567-1", str(e.exception))
+
     def test_a_catalog_alone_is_never_the_first_snapshot(self):
         with self.assertRaises(publish.Refused):
             self.run_once(self.catalog(100))
