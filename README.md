@@ -93,8 +93,9 @@ depends on them (grassfield ADR-0055).
   `PKGBUILD` holds the commit and the checksum); a changed `PKGBUILD` without a new `pkgrel` stops the build. The release job
   already uses a package published under the same name as it is.
 - **Time.** A release build compiles both from scratch (no cache on a run that can reach the release job,
-  `docs/build-caches.md`): about 10-15 minutes more for Sanaga and 5-8 for Notes on the runner, on top of the 25-27 minutes
-  of the desktop (estimates; the first CI run measures them).
+  `docs/build-caches.md`): estimated at 15-25 minutes more for Sanaga (WebKitGTK bindings, thin LTO) and 10-15 for Notes on the 4-vCPU
+  runner, on top of the 25-27 minutes of the desktop (measured here: Notes' release build and its 43 tests took about 15
+  minutes on a laptop sharing its cores with another build; the first CI run gives the real figures).
 
 ## Status
 Going live, unannounced, by the owner's decision of 2026-11-04: the repository is public and its packages are served at

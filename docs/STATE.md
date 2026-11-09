@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-11-05
+Last updated: 2026-11-09
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -410,6 +410,17 @@ Last updated: 2026-11-05
     throttles this repository: with the old `*/15` cron, scheduled runs came every 4-8 hours, and none came in the 45
     minutes after the variable was set. The integrator starts the build right after tagging; the poll is the fallback.
     An immediate start needs a token secret in grassfield and a tag workflow there (owner step, optional).
+- 2026-11-09, branch `feat/bundled-apps` (owner decision: Sanaga is the default browser, Notes the built-in Notes app; grassfield
+  ADR-0055 is the other half): `grassfield-sanaga/` and `grassfield-notes/`, one PKGBUILD each, pinned to
+  a9e0e561bfc8105efa5d9d56844c1c18034d04fd (sanaga 0.4.0, 79 commits) and 2daf1c887a93e7a0931626194546bb88b0aeffe8
+  (grassfield-notes 1.0.0, 24 commits); nothing published, no secret, no tag. ADR-0033 b.6 is unchanged: the browser's package
+  is `grassfield-sanaga` with `provides=(sanaga)` and `conflicts=(sanaga)` (a self-built `sanaga` is removed once, README).
+  - Source: GitHub's archive of the full commit with its SHA-256 (makepkg checks no checksum of a git source); `cargo fetch
+    --locked`, offline `--frozen` build, `check()` runs `cargo test`; pkgver `<Cargo version>.r<count>.g<sha7>`.
+  - `scripts/bump-app.sh` (one-step bump, `--verify` for the reviewer), `scripts/app-check.sh` (reuse rule: `.BUILDINFO`
+    records the PKGBUILD's SHA-256); `build-channel.sh` builds both before the desktop, signs, reuses, ships them in every
+    release build; `tests/smoke.sh` installs them through grassfield-desktop's depends; `tests/test_apps.py` and a publisher
+    test. No Rust cache added (docs/build-caches.md says why). `check-tree.sh`, `sign-release.sh`'s names unchanged.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
@@ -437,6 +448,13 @@ Last updated: 2026-11-05
   ok, 15792 packages, 41 entries and 1604 AppStream components gathered, check-env ok, both channels built, signed,
   verified).
 - Store step 0: none (docs only).
+- 2026-11-09, bundled apps: `python3 -I -m unittest discover -s tests` outside a container: `Ran 152 tests ... OK (skipped=31)`
+  (test_apps.py: 21 tests run; the container-only publisher tests, including the apps' one, run in CI's check job);
+  `bash -n` of the scripts; `scripts/bump-app.sh --verify` on both pins: exit 0 (versions, counts and checksums from the
+  network); a bump of a scratch copy from an older pin to the pin rewrote the PKGBUILD byte for byte; Notes at the pin:
+  `cargo test --frozen --release --jobs 4`: 43 passed, exit 0, headless; `--write-icon` and the ImageMagick resize: exit 0;
+  Sanaga at the pin: `cargo check --frozen --tests` with the SYSTEM_DEPS stubs: exit 0 (no webkitgtk-6.0 here: its tests
+  are CI's). No container ran (docker not usable by the agent).
 
 ## Open
 - Pruning of old snapshots (7 days, `tools/publish.py`) and of packages no snapshot names.
