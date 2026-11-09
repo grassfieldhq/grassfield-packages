@@ -2,8 +2,12 @@
 # built from ONE pinned commit. The package is named after the app, so it already fits the channel's grassfield-* rule
 # (grassfield ADR-0033 b.6); grassfield-desktop depends on it.
 #
-# The source is GitHub's archive tarball of the pinned commit with its SHA-256, not a git source: makepkg checks no
-# checksum of a git source (it writes SKIP, makepkg/source/git.sh), and a branch or tag can move. A bump changes _commit,
+# The source is GitHub's archive tarball of the pinned commit with its SHA-256, not a git source. makepkg can checksum a
+# git source pinned by #commit= (the SHA-256 of `git archive`, makepkg/source/git.sh), but that needs a clone with its
+# history, and those bytes depend on the git version and .gitattributes; the archive is one file fetched over HTTPS and
+# checked before anything is extracted. It relies on GitHub keeping an archive's bytes stable: if it ever changed them the
+# build would fail on the checksum rather than package other bytes (`scripts/bump-app.sh --verify` shows it). A bump changes
+# _commit,
 # _cargover, _rev and the checksum together, from one command, and goes through review (README.md, "Bundled apps"):
 #   scripts/bump-app.sh grassfield-notes <full 40-hex commit of grassfield-notes' main>
 # pkgver = Cargo.toml's version + .r<commits up to the pin> + .g<first 7 of the commit> (Arch's VCS form for a pinned
@@ -72,6 +76,31 @@ check() {
   cargo test --frozen --release
 }
 
+# Third-party licences: the crates linked into the binary with their versions and licence expressions (cargo's own metadata
+# through `cargo tree`, no extra tool), and the licence texts that ship inside the font crates (OFL, UFL and the like).
+# The legal review is the owner's; this only lists what Cargo.lock brings. Called from package() in the source directory.
+_licenses() { # outdir
+  local out=$1 host line name ver lic d f
+  host=$(rustc -vV | sed -n 's/host: //p')
+  install -dm755 "$out"
+  {
+    printf 'Third-party crates of %s %s: name, version, licence expression (from Cargo.lock, by cargo tree).\n' "$pkgname" "$pkgver"
+    printf 'The licence texts of the fonts it embeds are in the fonts/ folder beside this file.\n\n'
+    cargo tree --frozen --offline -e normal --target "$host" --prefix none --format '{p}|{l}' |
+      sed -e 's/ (\*)$//' -e 's/ ([^|]*)|/|/' -e 's/^\([^ ]*\) v\([^|]*\)|/\1 \2  /' | LC_ALL=C sort -u
+  } >"$out/THIRD-PARTY-LICENSES.txt"
+  while IFS= read -r line; do
+    name=${line%% *} ver=${line#* } ver=${ver%%  *} lic=${line#*  }
+    [[ $name == *font* || $lic == *OFL* || $lic == *UFL* || $lic == *Ubuntu-font* || $lic == *LicenseRef* ]] || continue
+    for d in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$name-$ver"; do
+      [[ -d $d ]] || continue
+      for f in "$d"/LICENSE* "$d"/COPYING* "$d"/OFL* "$d"/UFL* "$d"/fonts/*.txt; do
+        if [[ -f $f ]]; then install -Dm644 "$f" "$out/fonts/$name-$ver/${f##*/}"; fi
+      done
+    done
+  done < <(sed -n '/^$/,$p' "$out/THIRD-PARTY-LICENSES.txt" | grep -v '^$')
+}
+
 package() {
   cd "$srcdir/$_app-$_commit"
   install -Dm755 target/release/grassfield-notes "$pkgdir/usr/bin/grassfield-notes"
@@ -84,4 +113,5 @@ package() {
   # The full-size icon for 2x displays (hicolor's 512x512@2 directory is 1024 px).
   install -Dm644 icon-1024.png "$pkgdir/usr/share/icons/hicolor/512x512@2/apps/grassfield-notes.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  _licenses "$pkgdir/usr/share/licenses/$pkgname"
 }
