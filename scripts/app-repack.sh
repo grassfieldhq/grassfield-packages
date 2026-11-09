@@ -17,6 +17,9 @@
 #   0. which format is parsed: zstd alone decompresses the file to a plain one (under a size cap), and that must BE a tar: a
 #      valid checksum on the first 512-byte header and "ustar" at offset 257 (so libarchive's tar reader is the highest
 #      bidder and no cpio, zip, 7-Zip or further compression is ever handed to it); GNU tar must list the same members.
+#      Then libarchive's own report on that file must be an uncompressed POSIX ustar or pax tar (it decides on decompression
+#      before the format: a first block that is both a tar and a gzip header would be read as gzip and cpio), and GNU tar must
+#      read it with exit status 0.
 #   1. `bsdtar -tf` lists the members: no path twice (.PKGINFO included), every path one of the app's own, with every segment
 #      of only [A-Za-z0-9._@+-] (scripts/app-lib.sh: no space, control byte, newline or invalid UTF-8 in a name); the owners and
 #      modes libarchive prints are root:root, plain, no setuid, setgid or sticky bit, no group or world write.
@@ -72,9 +75,15 @@ if [[ $stage == root ]]; then
     chown 65534:65534 "$work"
     chmod 700 "$work"
     install -o 65534 -g 65534 -m 600 "$in" "$work/input.pkg"
+    rc=0
     setpriv --reuid=65534 --regid=65534 --clear-groups --inh-caps=-all --bounding-set=-all --no-new-privs \
       env -i PATH=/usr/bin:/usr/local/bin LC_ALL=C HOME="$work" TMPDIR="$work" \
-      "$0" --stage user --app "$app" --in "$work/input.pkg" --name "$file" --work "$work" --out "$work"
+      "$0" --stage user --app "$app" --in "$work/input.pkg" --name "$file" --work "$work" --out "$work" || rc=$?
+    # Whatever the unprivileged stage left running (it could race the install below, or outlive this script in the signing
+    # container) is killed before root reads anything it wrote.
+    pkill -KILL -u 65534 || true
+    ! pgrep -u 65534 >/dev/null || die "a process of the unprivileged user survives"
+    ((rc == 0)) || exit "$rc"
   fi
   [[ -f $work/$file && ! -L $work/$file ]] || die "the unprivileged stage wrote no $file"
   install -m644 "$work/$file" "$out/$file"
@@ -95,13 +104,26 @@ tree=$work/tree
 [[ $(head -c 4 "$in" | od -An -tx1 | tr -d ' \n') == 28b52ffd ]] || die "not a zstd frame"
 limit=$((1 << 30))
 plain=$work/plain.tar
-{ zstd -d -q --no-progress -c -- "$in" 2>/dev/null | head -c "$limit" >"$plain"; } || true
+set +e
+zstd -d -q --no-progress -c -- "$in" 2>/dev/null | head -c "$limit" >"$plain"
+zstd_status=${PIPESTATUS[0]}
+set -e
 size=$(stat -c %s "$plain")
-((size >= 1024 && size < limit && size % 512 == 0)) || die "not a plain tar behind the zstd frame (decompressed size $size)"
+((size < limit)) || die "decompresses to $limit bytes or more: refused"
+((zstd_status == 0)) || die "zstd cannot decompress it (exit status $zstd_status)"
+((size >= 1024 && size % 512 == 0)) || die "not a plain tar behind the zstd frame (decompressed size $size)"
 [[ $(head -c 262 "$plain" | tail -c 5) == ustar ]] || die "the decompressed file is not a tar of the ustar or pax family (no ustar magic at offset 257)"
 want=$(head -c 154 "$plain" | tail -c 6)
 have=$(od -An -v -tu1 -N512 "$plain" | awk '{ for (i = 1; i <= NF; i++) { n++; v = $i; if (n > 148 && n <= 156) v = 32; s += v } } END { print s }')
 [[ $want =~ ^[0-7]{6}$ ]] && ((8#$want == have)) || die "the first tar header's checksum is not valid: not a tar archive"
+
+# libarchive decides on decompression before it looks at the format, so a first block that is both a tar header and a gzip header
+# can be gunzipped and read as cpio: ask libarchive itself what it sees in the plain file, and refuse anything but a POSIX
+# ustar or pax tar with no compression; GNU tar must read the file as a tar too (exit status 0).
+footer=$(bsdtar -tvvf "$plain" 2>&1 | tail -n 1)
+[[ $footer =~ ^Archive\ Format:\ (POSIX\ pax\ interchange\ format|POSIX\ ustar\ format),\ +Compression:\ none$ ]] ||
+  die "libarchive does not read the plain file as an uncompressed POSIX tar: $footer"
+gnu=$(tar -tf "$plain" 2>/dev/null) || die "GNU tar cannot read the plain file as a tar (a polyglot libarchive reads as something else)"
 
 # 1. The members, as libarchive lists them.
 list=$(bsdtar -tf "$plain") || die "unreadable"
@@ -111,7 +133,7 @@ while IFS= read -r p; do
   app_path_ok "$app" "$p" || die "a path that is not this app's, or with a character outside [A-Za-z0-9._@+-]: $p"
 done <<<"$list"
 # 1b. An independent reader, GNU tar, lists the same members (a tar polyglot that libarchive reads as something else fails here).
-[[ $(tar -tf "$plain" 2>/dev/null | sort) == "$(printf '%s\n' "$list" | sort)" ]] || die "GNU tar and libarchive do not list the same members"
+[[ $(sort <<<"$gnu") == "$(printf '%s\n' "$list" | sort)" ]] || die "GNU tar and libarchive do not list the same members"
 bad=$(bsdtar -tvf "$plain" | awk '$1 !~ /^[-d][r-][w-][x-][r-]-[x-][r-]-[x-]$/ || $3 != "root" || $4 != "root" { print $1, $3, $4, $9 }' | head -n 1)
 [[ -z $bad ]] || die "not a regular file or folder, not owned by root, a setuid, setgid or sticky bit, or a group- or world-writable mode: $bad"
 

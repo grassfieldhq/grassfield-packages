@@ -9,7 +9,9 @@
 # later notices. So the file is repacked AGAIN here, in the container that signs (same image, so the same libarchive and zstd),
 # and must equal its own repack byte for byte: the repack is deterministic and idempotent, so a canonical package is its own
 # fixed point, and anything that is not (an xattr, a changed mode or time, an extra member, a flipped byte) is refused.
-# Needs what app-repack.sh needs (root in a container, or fakeroot in tests). Exit 0 identical, 1 refused, 2 usage.
+# It is a second pass of the same script with the same libarchive, not an independent parser: it catches tampering and logic
+# slips, not an exploit that works twice. Needs what app-repack.sh needs (root in a container, or fakeroot in tests). Exit 0
+# identical, 1 refused, 2 usage.
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 app="" in=""
@@ -26,5 +28,6 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/out"
 "$here/scripts/app-repack.sh" --app "$app" --in "$in" --out "$tmp/out" >"$tmp/log" 2>&1 || { tail -n 5 "$tmp/log" >&2; die "its own repack refuses it"; }
-cmp -s "$tmp/out/${in##*/}" "$in" || die "differs from its own repack (not canonical: something in it survived the first repack)"
+# (sha256sum, which coreutils has: the check container has no cmp)
+[[ $(sha256sum <"$tmp/out/${in##*/}") == "$(sha256sum <"$in")" ]] || die "differs from its own repack (not canonical: something in it survived the first repack)"
 echo "reverified ${in##*/}"
