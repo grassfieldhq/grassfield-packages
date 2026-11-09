@@ -127,7 +127,7 @@ build() { # tag [--pkgrel N]; this container is also the user's machine: its pac
   local rc
   cp /etc/pacman.conf "$W/pacman.conf.client"
   "$P/scripts/build-channel.sh" --source "$W/gf" --ref "$1" --tree "$W/tree" --gnupghome /root/keys/k --key "$K" \
-    --keyring "$W/keyring" "${@:2}" >"$W/build-$1${3:+-pkgrel$3}.log" 2>&1
+    --keyring "$W/keyring" --no-apps "${@:2}" >"$W/build-$1${3:+-pkgrel$3}.log" 2>&1
   rc=$?
   grep -q '^\[grassfield\]' "$W/pacman.conf.client" && cp "$W/pacman.conf.client" /etc/pacman.conf
   return $rc

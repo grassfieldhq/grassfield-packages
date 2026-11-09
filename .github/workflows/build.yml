@@ -96,7 +96,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: cache/pacman
-          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'grassfield/packaging/arch/PKGBUILD') }}
+          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'packages/grassfield-sanaga/PKGBUILD', 'packages/grassfield-notes/PKGBUILD', 'grassfield/packaging/arch/PKGBUILD') }}
           restore-keys: |
             pacman-dev-${{ steps.mode.outputs.digest }}-
       - name: Restore the ccache folder
@@ -115,6 +115,34 @@ jobs:
         with:
           path: cache/data
           key: data-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('grassfield/packaging/arch/icon*', 'grassfield/packaging/arch/wallpaper*', 'grassfield/branding/icons/theme/**', 'grassfield/branding/cursors/**', 'grassfield/packaging/plymouth/**', 'grassfield/apps/wallpaper-tool/**') }}
+      # The bundled apps (ADR-0055) run third-party build code (800+ crates, their tests and binaries). Each is built in a
+      # container of its own, with no sudoers entry and no shared HOME or SRCDEST, and only the package file comes out (apps/<app>/).
+      # The desktop's container below takes those files after scripts/app-check.sh and runs nothing from them; it has no
+      # key either way (the throwaway key is made there), and the release job signs with the project's key elsewhere.
+      - name: Build each bundled app in its own throwaway container (nothing privileged while cargo runs; only the package leaves)
+        run: |
+          set -euo pipefail
+          for app in grassfield-sanaga grassfield-notes; do
+            mkdir -p "apps/$app"
+            docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/apps/$app:/out" "$IMAGE" \
+              /packages/scripts/build-app.sh --app "$app" --out /out
+          done
+      # The package file an app container wrote is NOT trusted (third-party build code could have written it: an extended
+      # attribute, a second .PKGINFO, a header only libarchive reads). A third container, with no network and only this
+      # repository, the package (read-only) and an output folder, extracts it with libarchive (no xattrs, ACLs or flags),
+      # checks the tree on the filesystem, and rebuilds the package canonically (scripts/app-repack.sh). Only that file goes on.
+      - name: Repack each app package canonically (no network; only the repacked file leaves)
+        run: |
+          set -euo pipefail
+          mkdir -p apps/all
+          for app in grassfield-sanaga grassfield-notes; do
+            mkdir -p "apps/repacked/$app"
+            [ "$(ls "apps/$app" | wc -l)" = 1 ] || { echo "::error::apps/$app must hold exactly one file"; exit 1; }
+            f=$(ls "apps/$app")
+            docker run --rm --network none -v "$PWD/packages:/packages:ro" -v "$PWD/apps/$app:/in:ro" -v "$PWD/apps/repacked/$app:/out" "$IMAGE" \
+              /packages/scripts/app-repack.sh --app "$app" --in "/in/$f" --out /out
+          done
+          cp apps/repacked/grassfield-sanaga/*.pkg.tar.zst apps/repacked/grassfield-notes/*.pkg.tar.zst apps/all/
       - name: Build in a throwaway Arch container with Omarchy stable's package set, signed by a throwaway key
         env:
           REF: ${{ inputs.ref }}
@@ -128,7 +156,7 @@ jobs:
               -v "$PWD/cache/ccache:/cache/ccache" -e GRASSFIELD_CCACHE_DIR=/cache/ccache
               -v "$PWD/cache/data:/cache/data" -e GRASSFIELD_DATA_CACHE=/cache/data)
           fi
-          docker run --rm -e REF -e PKGREL "${cache_args[@]}" -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/out:/out" \
+          docker run --rm -e REF -e PKGREL "${cache_args[@]}" -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/apps/all:/apps:ro" -v "$PWD/out:/out" \
             "$IMAGE" bash -euo pipefail -c '
               trap "mkdir -p /out/build-stats; cp -r /build/stats/. /out/build-stats/ 2>/dev/null; cp /build/build.log /out/build.log 2>/dev/null || true" EXIT
               export GNUPGHOME=$(mktemp -d)
@@ -136,7 +164,7 @@ jobs:
                 --quick-gen-key "Grassfield CI build (throwaway) <ci@grassfield.invalid>" ed25519 sign 14d 2>/dev/null
               key=$(gpg --with-colons --list-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
               /packages/scripts/build-channel.sh --source /grassfield --ref "$REF" --tree /out/tree \
-                --gnupghome "$GNUPGHOME" --key "$key" ${PKGREL:+--pkgrel "$PKGREL"}
+                --gnupghome "$GNUPGHOME" --key "$key" --apps /apps ${PKGREL:+--pkgrel "$PKGREL"}
               gpg --export "$key" >/out/build-signing-key.gpg
               /packages/scripts/check-tree.sh --tree /out/tree --keyring /out/build-signing-key.gpg'
       # The container wrote out/: a symlink there must not take a file of this runner into the (public) job summary. Only
@@ -179,7 +207,7 @@ jobs:
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: cache/pacman
-          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'grassfield/packaging/arch/PKGBUILD') }}-${{ steps.after.outputs.listing }}
+          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'packages/grassfield-sanaga/PKGBUILD', 'packages/grassfield-notes/PKGBUILD', 'grassfield/packaging/arch/PKGBUILD') }}-${{ steps.after.outputs.listing }}
       - name: Save the ccache folder
         if: success() && env.USE_CACHE == 'true'
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3

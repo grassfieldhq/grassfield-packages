@@ -14,12 +14,19 @@
 #                  runs no build (sign-release.sh). This script refuses to start while GRASSFIELD_SIGNING_KEY or
 #                  GRASSFIELD_SIGNING_PASSPHRASE is set.
 #   --keyring DIR  grassfield-keyring's sources (default: keyring/ here, keyless until O11; the tests pass their own)
+#   --apps DIR     the packages scripts/build-app.sh built, one container per app (grassfield-sanaga, grassfield-notes): taken
+#                  only after scripts/app-check.sh, never built or run here. Not needed for an app already in --tree.
+#   --no-apps      tests of older refs (tests/e2e.sh) only: no bundled app in the release build
 #   --pkgrel N     GRASSFIELD_PKGREL: a rebuild of the same VERSION (O7), whose notes say "Rebuilt for Hyprland X.Y.Z"
 #
 # Runs only as root inside a throwaway Arch container (it refuses elsewhere): it replaces pacman.conf with Omarchy
 # stable's package set (build/pacman.conf, ADR-0033 f), installs the build dependencies, creates the user `builder` and
 # runs makepkg of grassfield's own packaging/arch/PKGBUILD (ADR-0023, the one build definition), after building and
-# installing grassfield-keyring, which grassfield-desktop depends on.
+# installing grassfield-keyring, which grassfield-desktop depends on, and after taking and installing (--noscriptlet) the
+# bundled apps grassfield-sanaga and grassfield-notes (grassfield-sanaga/, grassfield-notes/ here: Rust apps pinned to one
+# commit each, ADR-0055 in grassfield), which it depends on too. The apps are never built or run in this container:
+# scripts/build-app.sh built each in a container of its own and scripts/app-repack.sh rebuilt each package canonically in
+# another, with no network; only that repacked package comes in (--apps), and app-check.sh looks at it once more.
 #
 # The tree:
 #   releases/<channel>/<packages version>/   the release build, what the channel's one serialized publisher reads
@@ -41,7 +48,10 @@
 # The release notes come from the ref's packaging/release-notes/<VERSION>.{en,fr}.txt (O9; en required), followed by the
 # channel's earlier releases from the ref's own tags (notes.py --history). grassfield-keyring is built once per version:
 # every release's database names it and a package file name never changes content, so one already in the tree is used
-# again with its signature (the published one, once publishing is enabled).
+# again with its signature (the published one, once publishing is enabled). The two bundled apps follow the same rule: one
+# already in the tree is used again if it is signed by this key and scripts/app-check.sh finds it built from the very
+# PKGBUILD in git (a changed PKGBUILD is a new pkgrel, never new bytes under an old name); otherwise the one
+# from --apps is taken, after the same check, and signed. Every release build holds them (build-<id>.txt: apps).
 #
 # Optional speed-ups, all off unless the caller mounts and names a folder (docs/build-caches.md has the security reasoning):
 #   GRASSFIELD_CCACHE_DIR   ccache for every C/C++ compile of makepkg (the compiler wrappers first in makepkg's PATH); its
@@ -58,9 +68,9 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-source_dir="" ref="" tree="" gnupghome="" key="" keyring=$here/keyring pkgrel=""
+source_dir="" ref="" tree="" gnupghome="" key="" keyring=$here/keyring pkgrel="" apps_dir="" no_apps=""
 usage() {
-  echo "usage: build-channel.sh --source DIR --ref REF --tree DIR --gnupghome DIR --key FPR [--keyring DIR] [--pkgrel N]" >&2
+  echo "usage: build-channel.sh --source DIR --ref REF --tree DIR --gnupghome DIR --key FPR [--keyring DIR] [--pkgrel N] --apps DIR|--no-apps" >&2
   exit 2
 }
 die() {
@@ -73,8 +83,10 @@ stamp() { local l; while IFS= read -r l; do printf '[+%ss] %s\n' "$SECONDS" "$l"
 sample() { while :; do printf '%s %s\n' "$SECONDS" "$(ps -e -o comm= | sort -u | tr '\n' ' ')"; sleep 5; done; }
 
 while (($#)); do
+  if [[ $1 == --no-apps ]]; then no_apps=1; shift; continue; fi
   [[ $# -ge 2 ]] || usage
   case $1 in
+    --apps) apps_dir=$2 ;;
     --source) source_dir=$2 ;;
     --ref) ref=$2 ;;
     --tree) tree=$2 ;;
@@ -190,6 +202,50 @@ else
   echo "trust anchor: this ref pins no key yet (owner decision O11): nothing to check"
 fi
 
+# The bundled apps (ADR-0055): each folder here is a PKGBUILD pinned to one commit by a full SHA and a SHA-256 of GitHub's
+# archive of it. They are NOT built here: their build runs third-party code (800+ crates, their tests and binaries), so
+# scripts/build-app.sh builds each in a container of its own, with no sudoers entry, and leaves only the package in --apps.
+# This container, whose makepkg builds the desktop that the key signs, takes that one file, after scripts/app-check.sh passed
+# it (pinned PKGBUILD, allowed paths only, no .INSTALL, no hook, its dependency lines, built from the very PKGBUILD in git),
+# and runs nothing from it: grassfield-desktop's makepkg -s needs the apps installed to satisfy its depends, so the package
+# is installed with --noscriptlet after that check. One already in the tree is reused like the keyring (same name, signed by
+# this key, the same check); a changed PKGBUILD is a new pkgrel.
+apps=(grassfield-sanaga grassfield-notes)
+shipped=("$keyring_pkg")
+app_versions=()
+ingest_app() { # package folder name -> its package in /build/apps/<name>/, signed, appended to shipped
+  local name=$1 work=/build/apps/$1 av pkg how signer
+  mkdir -p "$work"
+  how=$("$here/scripts/app-ingest.sh" "$name" "${apps_dir:-/nonexistent}" "$tree" "$work" 2>>"$log") || { tail -n 5 "$log"; die "$name (see $log)"; }
+  av=$(bash -c 'source "$1/PKGBUILD" >/dev/null 2>&1; printf %s-%s "$pkgver" "$pkgrel"' _ "$here/$name")
+  pkg=$work/$name-$av-x86_64.pkg.tar.zst
+  # The second pass: the file is repacked again HERE, where it will be signed, and must equal its own repack byte for byte, so
+  # the signed file does not depend on the repack container alone (scripts/app-reverify.sh).
+  "$here/scripts/app-reverify.sh" --app "$name" --in "$pkg" >>"$log" 2>&1 || { tail -n 5 "$log"; die "$name is not its own canonical repack (see $log)"; }
+  if [[ $how == reused* ]]; then
+    signer=$(gpg --homedir "$gnupghome" --batch --no-tty --status-fd 1 --verify "$pkg.sig" "$pkg" 2>>"$log" |
+      awk '$2 == "VALIDSIG" { print $12 }' || true)
+    [[ $signer == "$key" ]] || die "${how#reused } is not signed by $key"
+    echo "$name $av: the one built before, used again (${how#reused })"
+  else
+    echo "$name $av: built in its own container ($how)"
+    sign "$pkg"
+  fi
+  # Installed for grassfield-desktop's makepkg -s, from a copy without its .sig (pacman checks a signature found beside a
+  # file, and this machine does not trust the key), with --noscriptlet: no scriptlet of the package runs here (stock libalpm hooks over its icons and .desktop file still do: README).
+  cp "$pkg" /build/unsigned/ && pacman -U --noscriptlet --noconfirm "/build/unsigned/${pkg##*/}" >>"$log" 2>&1 || die "install of $name (see $log)"
+  shipped+=("$pkg")
+  app_versions+=("$name-$av")
+}
+mkdir -p /build/apps
+find /build/apps -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+if [[ -n $no_apps ]]; then
+  echo "bundled apps: none (--no-apps: tests of older refs only)"
+else
+  step "bundled apps (${apps[*]})"
+  for a in "${apps[@]}"; do ingest_app "$a"; done
+fi
+
 step "makepkg (grassfield's packaging/arch/PKGBUILD)"
 mkdir -p /build/srcdest /build/pkgs
 chown -R builder: /build/src /build/srcdest /build/pkgs
@@ -224,7 +280,7 @@ if [[ -n ${GRASSFIELD_PACMAN_CACHE_PRUNE:-} ]]; then
   chmod -R a+rX /var/cache/pacman/pkg
 fi
 mapfile -t built < <(ls /build/pkgs/*.pkg.tar.zst)
-for f in "${built[@]}" "$keyring_pkg"; do
+for f in "${built[@]}" "${shipped[@]}"; do
   info=$(bsdtar -xOf "$f" .PKGINFO)
   name=$(sed -n 's/^pkgname = //p' <<<"$info")
   [[ $name == grassfield-* ]] || die "$(basename "$f"): $name is not named grassfield-* (ADR-0033 b.6)"
@@ -251,7 +307,7 @@ done < <(printf '%s\n' "$deps")
 from_omarchy=$(comm -12 <(pacman -Qq | sort) <(pacman -Sl omarchy 2>/dev/null | awk '{ print $2 }' | sort) | tr '\n' ' ')
 echo "installed from [omarchy]: ${from_omarchy:-none}"
 for f in "${built[@]}"; do sign "$f"; done
-printf '%s\n' "${built[@]##*/}" "${keyring_pkg##*/}"
+printf '%s\n' "${built[@]##*/}" "${shipped[@]##*/}"
 hyprland=$(pacman -Q hyprland 2>/dev/null | awk '{print $2}') || true
 [[ -n $hyprland ]] || die "hyprland is not installed after makepkg -s: no version for the build record and the rebuild notes"
 # A pkgrel rebuild (O7) says which Hyprland it was rebuilt for: the one makepkg -s installed, without its pkgrel.
@@ -261,7 +317,7 @@ release_build() { # channel -> releases/<channel>/<packages version>/, a databas
   local c=$1 out=$tree/releases/$1/$full work f
   [[ ! -e $out ]] || die "$out exists already: each release is built once"
   mkdir -p "$out"
-  for f in "${built[@]}" "$keyring_pkg"; do cp "$f" "$f.sig" "$out/"; done
+  for f in "${built[@]}" "${shipped[@]}"; do cp "$f" "$f.sig" "$out/"; done
   work=$(mktemp -d /build/db.XXXXXX)
   # Without --include-sigs, repo-add records no signature: pacman fetches each package's .sig beside it. The databases
   # are signed below, by the same key.
@@ -303,6 +359,7 @@ abi=$(bsdtar -xOf /build/pkgs/grassfield-compositor-*.pkg.tar.zst usr/lib/grassf
   echo "version $version"
   echo "packages $full"
   echo "keyring $kv${reused:+ (built before)}"
+  echo "apps ${app_versions[*]}"
   echo "releases ${channels[*]/%//$full}"
   echo "snapshots ${updated[*]:-none}"
   echo "signing-key $key"

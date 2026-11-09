@@ -1,0 +1,117 @@
+# grassfield-notes: Grassfield Notes, the built-in Markdown notebook (https://github.com/grassfieldhq/grassfield-notes),
+# built from ONE pinned commit. The package is named after the app, so it already fits the channel's grassfield-* rule
+# (grassfield ADR-0033 b.6); grassfield-desktop depends on it.
+#
+# The source is GitHub's archive tarball of the pinned commit with its SHA-256, not a git source. makepkg can checksum a
+# git source pinned by #commit= (the SHA-256 of `git archive`, makepkg/source/git.sh), but that needs a clone with its
+# history, and those bytes depend on the git version and .gitattributes; the archive is one file fetched over HTTPS and
+# checked before anything is extracted. It relies on GitHub keeping an archive's bytes stable: if it ever changed them the
+# build would fail on the checksum rather than package other bytes (`scripts/bump-app.sh --verify` shows it). A bump changes
+# _commit,
+# _cargover, _rev and the checksum together, from one command, and goes through review (README.md, "Bundled apps"):
+#   scripts/bump-app.sh grassfield-notes <full 40-hex commit of grassfield-notes' main>
+# pkgver = Cargo.toml's version + .r<commits up to the pin> + .g<first 7 of the commit> (Arch's VCS form for a pinned
+# commit; the count keeps versions ordered along main). prepare() refuses a PKGBUILD whose _cargover is not the source's.
+# Any other change to this file is a new pkgrel: a package file name never changes content (scripts/build-channel.sh).
+_app=grassfield-notes
+_cargover=1.0.0
+_rev=24
+_commit=2daf1c887a93e7a0931626194546bb88b0aeffe8
+pkgname=grassfield-notes
+pkgver=${_cargover}.r${_rev}.g${_commit:0:7}
+pkgrel=1
+pkgdesc="Grassfield Notes, a calm, private Markdown notebook"
+arch=(x86_64)
+url="https://github.com/grassfieldhq/grassfield-notes"
+license=(MIT)
+# eframe (features glow, wayland, x11, default_fonts): the binary links only libc, libm and libgcc_s; winit and glow open
+# libwayland-client, libxkbcommon and libEGL/libGL with dlopen at run time, so they are named here. The fonts are inside
+# the binary (default_fonts, monochrome_emoji_fonts): no fontconfig. xdg-utils: `xdg-open` and `xdg-mime` (open a note's
+# links, set the default app for .md files). The system keyring (the GitHub token), the Open and Save panels and GitHub
+# sync are D-Bus and git features that degrade without their provider, so they are optional.
+depends=(
+  hicolor-icon-theme
+  wayland
+  libxkbcommon
+  libglvnd
+  xdg-utils
+)
+optdepends=(
+  'gnome-keyring: the system keyring that holds the GitHub token (any Secret Service works)'
+  'xdg-desktop-portal: the system Open and Save panels'
+  'git: GitHub sync'
+  'openssh: GitHub sync over SSH'
+  'tesseract: reading text in scanned documents'
+  'poppler: reading text in PDF files'
+  'libxkbcommon-x11: Grassfield Notes on an X11 session'
+  'libx11: Grassfield Notes on an X11 session'
+)
+makedepends=(rust imagemagick)
+checkdepends=(git openssh)
+# makepkg's link-time optimisation breaks the C parts of Rust crates; the debug package is not part of the channel.
+options=(!lto !debug)
+source=("$pkgname-$_commit.tar.gz::https://github.com/grassfieldhq/$_app/archive/$_commit.tar.gz")
+sha256sums=('dfbe3160b5ec868225c0f7f26cac67c0132e7c9ce1ad92e83be2b746f4f90e75')
+
+prepare() {
+  cd "$srcdir/$_app-$_commit"
+  local v
+  v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+  [[ $v == "$_cargover" ]] || { echo "Cargo.toml says $v, this PKGBUILD says $_cargover: use scripts/bump-app.sh" >&2; return 1; }
+  # The only network step: the crates named, with their checksums, by Cargo.lock.
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/$_app-$_commit"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+  # The app draws its own icon: a 1024 px PNG (no display needed).
+  target/release/grassfield-notes --write-icon icon-1024.png
+}
+
+check() {
+  cd "$srcdir/$_app-$_commit"
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --release
+}
+
+# Third-party licences: the crates linked into the binary with their versions and licence expressions (cargo's own metadata
+# through `cargo tree`, no extra tool), and the licence texts that ship inside the font crates (OFL, UFL and the like).
+# The legal review is the owner's; this only lists what Cargo.lock brings. Called from package() in the source directory.
+_licenses() { # outdir
+  local out=$1 host line name ver lic d f
+  host=$(rustc -vV | sed -n 's/host: //p')
+  install -dm755 "$out"
+  {
+    printf 'Third-party crates of %s %s: name, version, licence expression (from Cargo.lock, by cargo tree).\n' "$pkgname" "$pkgver"
+    printf 'The licence texts of the fonts it embeds are in the fonts/ folder beside this file.\n\n'
+    cargo tree --frozen --offline -e normal --target "$host" --prefix none --format '{p}|{l}' |
+      sed -e 's/ (\*)$//' -e 's/ ([^|]*)|/|/' -e 's/^\([^ ]*\) v\([^|]*\)|/\1 \2  /' | LC_ALL=C sort -u
+  } >"$out/THIRD-PARTY-LICENSES.txt"
+  while IFS= read -r line; do
+    name=${line%% *} ver=${line#* } ver=${ver%%  *} lic=${line#*  }
+    [[ $name == *font* || $lic == *OFL* || $lic == *UFL* || $lic == *Ubuntu-font* || $lic == *LicenseRef* ]] || continue
+    for d in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$name-$ver"; do
+      [[ -d $d ]] || continue
+      for f in "$d"/LICENSE* "$d"/COPYING* "$d"/OFL* "$d"/UFL* "$d"/fonts/*.txt; do
+        if [[ -f $f ]]; then install -Dm644 "$f" "$out/fonts/$name-$ver/${f##*/}"; fi
+      done
+    done
+  done < <(sed -n '/^$/,$p' "$out/THIRD-PARTY-LICENSES.txt" | grep -v '^$')
+}
+
+package() {
+  cd "$srcdir/$_app-$_commit"
+  install -Dm755 target/release/grassfield-notes "$pkgdir/usr/bin/grassfield-notes"
+  install -Dm644 packaging/grassfield-notes.desktop "$pkgdir/usr/share/applications/grassfield-notes.desktop"
+  local s
+  for s in 48 64 128 256 512; do
+    install -dm755 "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps"
+    magick icon-1024.png -resize "${s}x${s}" "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/grassfield-notes.png"
+  done
+  # The full-size icon for 2x displays (hicolor's 512x512@2 directory is 1024 px).
+  install -Dm644 icon-1024.png "$pkgdir/usr/share/icons/hicolor/512x512@2/apps/grassfield-notes.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  _licenses "$pkgdir/usr/share/licenses/$pkgname"
+}

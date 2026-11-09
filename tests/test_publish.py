@@ -105,6 +105,14 @@ class Publisher(unittest.TestCase):
             catalog.sign(os.path.join(folder, name), self.home, self.keys[0])
         return folder
 
+    def reuse(self, from_version, to_version, name, version):
+        """An unchanged package in a later release is the published file, signature included, as the release build reuses
+        it (sign-release.sh prepare): re-signing it would change the .sig's bytes (gpg's signature time) under an immutable
+        name. Copies the package and its .sig from an earlier release folder."""
+        for suffix in ("", ".sig"):
+            base = f"{name}-{version}-x86_64.pkg.tar.zst{suffix}"
+            shutil.copyfile(os.path.join(self.releases, from_version, base), os.path.join(self.releases, to_version, base))
+
     def catalog(self, serial, row="Tools", channel="stable", key=0):
         """A catalog built by tools/catalog.py from test_catalog's sources (row: the title of its one row, to change its
         content) and signed by a throwaway key."""
@@ -260,6 +268,34 @@ class Publisher(unittest.TestCase):
         with self.assertRaises(publish.Refused) as e:
             self.run_once(now=1793099999)
         self.assertIn("grassfield-icons 1.0.0-1, older than the published 1.0.1-1", str(e.exception))
+
+    def test_bundled_apps_are_published_kept_and_never_go_backwards(self):
+        """grassfield-sanaga and grassfield-notes (grassfield ADR-0055) are packages of the release like the others: in the
+        snapshot's database, immutable names in the channel, kept by a catalog update, and never older than the published."""
+        apps = {"grassfield-sanaga": "0.4.0.r79.ga9e0e56-1", "grassfield-notes": "1.0.0.r24.g2daf1c8-1"}
+        both = lambda v, **apps_: {"grassfield-desktop": v, "grassfield-icons": v, **{**apps, **apps_}}
+        self.release("1.0.0-1", both("1.0.0-1"))
+        first, _ = self.run_once()
+        db = publish.db_versions(self.store.snapshot_path(first, "grassfield.db"))
+        for name, version in apps.items():
+            self.assertEqual(db.get(name), version)
+            self.assertTrue(os.path.exists(os.path.join(self.store.base, f"{name}-{version}-x86_64.pkg.tar.zst")))
+            self.assertTrue(os.path.exists(os.path.join(self.store.base, f"{name}-{version}-x86_64.pkg.tar.zst.sig")))
+        # A catalog update keeps them (the database is the same file).
+        second, _ = self.run_once(self.catalog(100), now=1793095300)
+        self.assertEqual(publish.db_versions(self.store.snapshot_path(second, "grassfield.db")), db)
+        # A bump (more commits, the same Cargo version) is newer: r80 above r79 under vercmp.
+        self.release("1.0.1-1", both("1.0.1-1", **{"grassfield-sanaga": "0.4.0.r80.g1234567-1"}))
+        self.reuse("1.0.0-1", "1.0.1-1", "grassfield-notes", apps["grassfield-notes"])
+        third, _ = self.run_once(self.catalog(100), now=1793095400)
+        self.assertEqual(publish.db_versions(self.store.snapshot_path(third, "grassfield.db"))["grassfield-sanaga"],
+                         "0.4.0.r80.g1234567-1")
+        # An older pin, in a later release, is refused: the publisher never puts an older package back.
+        self.release("1.0.2-1", both("1.0.2-1", **{"grassfield-sanaga": "0.4.0.r79.ga9e0e56-1"}))
+        self.reuse("1.0.0-1", "1.0.2-1", "grassfield-notes", apps["grassfield-notes"])
+        with self.assertRaises(publish.Refused) as e:
+            self.run_once(self.catalog(100), now=1793099999)
+        self.assertIn("grassfield-sanaga 0.4.0.r79.ga9e0e56-1, older than the published 0.4.0.r80.g1234567-1", str(e.exception))
 
     def test_a_catalog_alone_is_never_the_first_snapshot(self):
         with self.assertRaises(publish.Refused):

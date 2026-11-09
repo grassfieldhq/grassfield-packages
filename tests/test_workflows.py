@@ -209,7 +209,7 @@ def tag_problems(doc):
     """A run that can reach the release job refuses a commit that is not on grassfield's main, before it builds."""
     out = []
     steps = doc["jobs"]["build"]["steps"]
-    docker = [i for i, s in enumerate(steps) if "docker run" in str(s.get("run", ""))]
+    docker = [i for i, s in enumerate(steps) if "docker run" in str(s.get("run", "")) and "build-channel.sh" in str(s.get("run", ""))]
     checkout = [i for i, s in enumerate(steps) if (s.get("with") or {}).get("repository") == "grassfieldhq/grassfield"]
     guard = [i for i, s in enumerate(steps) if "merge-base --is-ancestor" in str(s.get("run", ""))]
     if len(guard) != 1 or not docker or len(checkout) != 1:
@@ -480,7 +480,7 @@ class MutationsAreCaught(Guards):
             s = steps(d)
             g = find(d)
             s.remove(g)
-            s.insert(next(i for i, x in enumerate(s) if "docker run" in str(x.get("run", ""))) + 1, g)
+            s.insert(next(i for i, x in enumerate(s) if "docker run" in str(x.get("run", "")) and "build-channel.sh" in str(x.get("run", ""))) + 1, g)
         self.caught(tag_problems, mutated(moved), "build.yml")
 
         def shallow(d):
@@ -497,7 +497,7 @@ class MutationsAreCaught(Guards):
 
         def build_other(d):
             for s in steps(d):
-                if "docker run" in str(s.get("run", "")):
+                if "docker run" in str(s.get("run", "")) and "build-channel.sh" in str(s.get("run", "")):
                     s["env"]["REF"] = "${{ inputs.ref }}-evil"
         self.caught(tag_problems, mutated(build_other), "build.yml")
 
@@ -526,6 +526,51 @@ class MutationsAreCaught(Guards):
             d["build.yml"]["jobs"]["build"]["steps"].insert(0, {"uses": "actions/download-artifact@" + "0" * 40,
                                                                 "with": {"name": "x", "run-id": "1", "github-token": "t"}})
         self.caught(action_problems, mutated(other_run))
+
+
+@unittest.skipIf(yaml is None, "needs PyYAML")
+class EveryWorkflowFileIsValid(unittest.TestCase):
+    """Third review of PR #22, finding 4: a push of 2c70286 started no job ("workflow file issue"), so CI never ran the unit
+    tests. Whatever the cause, every workflow file is checked here for what GitHub refuses at startup and a plain load does
+    not: a key twice in one mapping (PyYAML keeps the last), a job without runs-on or uses, a step with neither run nor uses
+    (or both), a duplicated step id, a needs naming no job, and a trigger section."""
+
+    @staticmethod
+    def strict_load(path):
+        class Loader(yaml.SafeLoader):
+            pass
+
+        def mapping(loader, node, deep=False):
+            seen = set()
+            for key_node, _ in node.value:
+                key = loader.construct_object(key_node, deep=deep)
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
+                seen.add(key)
+            return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+        Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+        return yaml.load(path.read_text(), Loader)
+
+    def test_each_file_loads_without_a_repeated_key_and_has_the_shape_github_needs(self):
+        files = sorted(WORKFLOWS.glob("*.yml"))
+        self.assertGreaterEqual(len(files), 5)
+        for path in files:
+            with self.subTest(path.name):
+                doc = self.strict_load(path)
+                self.assertIsInstance(doc, dict)
+                self.assertTrue(doc.get("name"), "a workflow has a name")
+                self.assertTrue(True in doc or "on" in doc, "the trigger section (`on:` loads as True)")
+                jobs = doc["jobs"]
+                self.assertTrue(jobs)
+                for job_id, job in jobs.items():
+                    self.assertTrue("runs-on" in job or "uses" in job, f"job {job_id} has no runs-on or uses")
+                    for need in ([job["needs"]] if isinstance(job.get("needs"), str) else job.get("needs", [])):
+                        self.assertIn(need, jobs, f"job {job_id} needs {need}, which is no job")
+                    ids = [st["id"] for st in job.get("steps", []) if "id" in st]
+                    self.assertEqual(len(ids), len(set(ids)), f"job {job_id} repeats a step id")
+                    for st in job.get("steps", []):
+                        self.assertTrue(("run" in st) != ("uses" in st), f"a step of {job_id} needs exactly one of run and uses: {st.get('name')}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # Grassfield packages — Current State
-Last updated: 2026-11-05
+Last updated: 2026-11-09
 
 ## Done
 - Repository created (private) with README, LICENSE (MIT), CLAUDE.md and this file.
@@ -410,6 +410,59 @@ Last updated: 2026-11-05
     throttles this repository: with the old `*/15` cron, scheduled runs came every 4-8 hours, and none came in the 45
     minutes after the variable was set. The integrator starts the build right after tagging; the poll is the fallback.
     An immediate start needs a token secret in grassfield and a tag workflow there (owner step, optional).
+- 2026-11-09, branch `feat/bundled-apps` (owner decision: Sanaga is the default browser, Notes the built-in Notes app; grassfield
+  ADR-0055 is the other half): `grassfield-sanaga/` and `grassfield-notes/`, one PKGBUILD each, pinned to
+  a9e0e561bfc8105efa5d9d56844c1c18034d04fd (sanaga 0.4.0, 79 commits) and 2daf1c887a93e7a0931626194546bb88b0aeffe8
+  (grassfield-notes 1.0.0, 24 commits); nothing published, no secret, no tag. ADR-0033 b.6 is unchanged: the browser's package
+  is `grassfield-sanaga` with `provides=(sanaga)` and `conflicts=(sanaga)` (a self-built `sanaga` is removed once, README).
+  - Source: GitHub's archive of the full commit with its SHA-256 (makepkg checks no checksum of a git source); `cargo fetch
+    --locked`, offline `--frozen` build, `check()` runs `cargo test`; pkgver `<Cargo version>.r<count>.g<sha7>`.
+  - `scripts/bump-app.sh` (one-step bump, `--verify` for the reviewer), `scripts/app-check.sh` (reuse rule: `.BUILDINFO`
+    records the PKGBUILD's SHA-256); `build-channel.sh` builds both before the desktop, signs, reuses, ships them in every
+    release build; `tests/smoke.sh` installs them through grassfield-desktop's depends; `tests/test_apps.py` and a publisher
+    test. No Rust cache added (docs/build-caches.md says why). `check-tree.sh`, `sign-release.sh`'s names unchanged.
+  - Review of PR #22 (FAIL) fixed: each app is built by `scripts/build-app.sh` in its own container (root installs the
+    dependencies, then makepkg without -s as an unprivileged user with no sudoers entry, a fresh HOME, a scrubbed
+    environment; only the package leaves); `build-channel.sh --apps DIR` takes it through `app-ingest.sh` and `app-check.sh`
+    (allowed paths only, no .INSTALL or hook, dependency lines, PKGBUILD hash) and installs it with `--noscriptlet`;
+    `pin-check.sh` reads every source and checksum array (architecture-suffixed ones too) and refuses install= and
+    replaces=; `sign-release.sh prepare` runs `app-check.sh` on the release's apps (a published package cannot hide a
+    changed PKGBUILD); CI runs `bump-app.sh --verify` (catalog.yml and in each app container); smoke.sh checks
+    `pacman -Qq sanaga` names grassfield-sanaga; each package ships THIRD-PARTY-LICENSES.txt and the font licence texts.
+  - Re-review of PR #22 (FAIL on the package gate) fixed: `app-check.sh` reads the members with `scripts/pkg-members.py`
+    (Python tarfile on the zstd stream: refuses any pax header such as security.capability, ACLs and flags, non-root owners,
+    setuid, setgid, sticky, group- or world-writable modes, and every type but file and folder; a stream scan where python3 is
+    absent), requires exactly the app's own paths (one binary, its .desktop, icons, metainfo, licences; no usr/share/doc),
+    one line per single-valued .PKGINFO key; `release-apps-check.sh` (sign-release prepare) selects apps by .PKGINFO name and
+    refuses a release whose desktop depends on an app it lacks; smoke.sh looks for the desktop's depends on
+    grassfield-sanaga and grassfield-notes; README lists the libalpm hooks that can match and why they are accepted.
+  - Third review of PR #22 (FAIL: the parsers): the signed artifact is now canonical. `scripts/app-repack.sh` (a third
+    container, no network) extracts each app package with bsdtar and --no-xattrs --no-acls --no-fflags, checks the tree on the
+    filesystem (file types, root owner, modes, empty getfattr, allowed paths, no repeated path or .PKGINFO), rebuilds it as
+    makepkg does (modes, owner, mtimes = builddate, regenerated .MTREE, zstd -T1: byte-reproducible) and proves it by
+    extracting the result with xattrs enabled; only that file goes to the signer and the desktop's container. The Python
+    reader and the grep fallback are removed (the repack makes them unnecessary); app-check.sh is the second check.
+    Tests run it under fakeroot (CI: as root in the container) on crafted packages: a bad-mtime header with a hidden xattr
+    (the control shows libarchive applies it), an 8 MiB package with an xattr, two .PKGINFO, a duplicate path, a symlink, a
+    `..` path, setuid, world-writable, a foreign owner, .INSTALL. CI's check job on 2c70286 did not start ("workflow file
+    issue", 0 jobs): the workflow files are unchanged since the run that passed, no YAML error was found; every workflow
+    file is now checked (duplicate keys, job and step shape) by tests/test_workflows.py.
+  - Fourth review of PR #22 (the canonical repack is sound, five fixes): bsdtar's `-p` placed after `--no-xattrs --no-acls
+    --no-fflags` switched them back on (CI's catalog run failed 2 Repack tests as root): `-p` now comes first; the repack
+    parses the untrusted file only unprivileged (setpriv: uid 65534, no capabilities, no_new_privs) after a zstd and ustar magic
+    check, creates the archive with --uid 0 --gid 0 --uname root --gname root (no chown), prints the libarchive version and
+    documents that the pinned image must be refreshed for its security fixes (no job does it: the integrator); path segments
+    are only [A-Za-z0-9._@+-] (a newline name would read back as another database entry); .PKGINFO and .BUILDINFO are
+    generated from our PKGBUILD (`makepkg --printsrcinfo`), the originals only compared (an ESC licence line is refused);
+    the Repack tests that need real xattrs and owners run only as root in a container (CI, or docker through
+    tests/run-in-container.sh) and are reported "NOT VERIFIED" otherwise; fakeroot runs the listing-based ones.
+  - Fifth review of PR #22 (PASS, two follow-ups): the repack's step 0 now decompresses with zstd alone to a plain file and
+    requires a real tar (size multiple of 512 under a cap, valid checksum on the first header, ustar at offset 257, GNU tar
+    listing the same members), so no cpio, zip, 7-Zip or compressed archive inside the zstd frame reaches libarchive; and
+    scripts/app-reverify.sh (called by build-channel.sh before signing, in the desktop's container) repacks the repacked file again
+    and refuses any difference, so the signed file does not rest on the repack container alone.
+    Open: the app containers keep the network (one container cannot cut it for cargo alone); the legal review of the
+    licences is the owner's; a release rebuilds both apps in CI each time.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
@@ -437,6 +490,13 @@ Last updated: 2026-11-05
   ok, 15792 packages, 41 entries and 1604 AppStream components gathered, check-env ok, both channels built, signed,
   verified).
 - Store step 0: none (docs only).
+- 2026-11-09, bundled apps: `python3 -I -m unittest discover -s tests` outside a container: `Ran 152 tests ... OK (skipped=31)`
+  (test_apps.py: 21 tests run; the container-only publisher tests, including the apps' one, run in CI's check job);
+  `bash -n` of the scripts; `scripts/bump-app.sh --verify` on both pins: exit 0 (versions, counts and checksums from the
+  network); a bump of a scratch copy from an older pin to the pin rewrote the PKGBUILD byte for byte; Notes at the pin:
+  `cargo test --frozen --release --jobs 4`: 43 passed, exit 0, headless; `--write-icon` and the ImageMagick resize: exit 0;
+  Sanaga at the pin: `cargo check --frozen --tests` with the SYSTEM_DEPS stubs: exit 0 (no webkitgtk-6.0 here: its tests
+  are CI's). No container ran (docker not usable by the agent).
 
 ## Open
 - Pruning of old snapshots (7 days, `tools/publish.py`) and of packages no snapshot names.

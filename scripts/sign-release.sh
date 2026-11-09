@@ -81,6 +81,10 @@ if [[ $mode == prepare ]]; then
   k=$(ls ./grassfield-keyring-*.pkg.tar.zst 2>/dev/null | head -n 1)
   [[ -n $k ]] || die "$release holds no grassfield-keyring"
   "$self/keyring-check.sh" "$k" "$keyring" || die "${k#./} is not keyring/'s"
+  # The bundled apps this release ships, built or published, are the PKGBUILDs in git, and a release whose desktop depends on
+  # one holds it (scripts/release-apps-check.sh). A published package of the same name replaced the new build above after a
+  # signature check only: a PKGBUILD changed without a new pkgrel would ship the old package after the new one was tested.
+  "$self/release-apps-check.sh" . || die "the bundled apps of $release are not the PKGBUILDs' (see above)"
   work=$(mktemp -d)
   repo-add --quiet "$work/grassfield.db.tar.gz" "${packages[@]}" >/dev/null || die "repo-add"
   cp -L "$work/grassfield.db.tar.gz" grassfield.db

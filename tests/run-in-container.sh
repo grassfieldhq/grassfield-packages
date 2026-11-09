@@ -9,4 +9,4 @@ exec docker run --rm -e CI -e GITHUB_ACTIONS "$@" -v "$root":/src:ro "$image" ba
   if [[ -f /ccr-ca.crt ]]; then cp /ccr-ca.crt /etc/ca-certificates/trust-source/anchors/ccr.crt && update-ca-trust; fi
   pacman -Syu --noconfirm --needed python python-yaml gnupg >/dev/null
   cd /tmp && cp -r /src /tmp/src && cd /tmp/src
-  python3 -I -m unittest discover -s tests -v'
+  python3 -I -m unittest discover -s tests ${GRASSFIELD_UNITTEST_ARGS:-} -v'

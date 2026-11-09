@@ -1,0 +1,128 @@
+# grassfield-sanaga: Sanaga, the Grassfield web browser (https://github.com/grassfieldhq/sanaga), built from ONE pinned commit.
+#
+# Why this name (owner decision, 2026-11-09): the channel holds only packages named grassfield-* (grassfield ADR-0033 b.6), so
+# the package is grassfield-sanaga and it provides `sanaga`, which grassfield-desktop depends on. conflicts=(sanaga) is
+# deliberate: a machine with a self-built `sanaga` must remove it once before the first update that brings this package,
+# or both would own /usr/bin/sanaga. No replaces= (b.6 forbids it).
+#
+# The source is GitHub's archive tarball of the pinned commit with its SHA-256, not a git source. makepkg can checksum a
+# git source pinned by #commit= (the SHA-256 of `git archive`, makepkg/source/git.sh), but that needs a clone with its
+# history, and those bytes depend on the git version and .gitattributes; the archive is one file fetched over HTTPS and
+# checked before anything is extracted. It relies on GitHub keeping an archive's bytes stable: if it ever changed them the
+# build would fail on the checksum rather than package other bytes (`scripts/bump-app.sh --verify` shows it). A bump changes
+# _commit,
+# _cargover, _rev and the checksum together, from one command, and goes through review (README.md, "Bundled apps"):
+#   scripts/bump-app.sh grassfield-sanaga <full 40-hex commit of sanaga's main>
+# pkgver = Cargo.toml's version + .r<commits up to the pin> + .g<first 7 of the commit> (Arch's VCS form for a pinned
+# commit; the count keeps versions ordered along main). prepare() refuses a PKGBUILD whose _cargover is not the source's.
+# Any other change to this file is a new pkgrel: a package file name never changes content (scripts/build-channel.sh).
+_app=sanaga
+_cargover=0.4.0
+_rev=79
+_commit=a9e0e561bfc8105efa5d9d56844c1c18034d04fd
+pkgname=grassfield-sanaga
+pkgver=${_cargover}.r${_rev}.g${_commit:0:7}
+pkgrel=1
+pkgdesc="Sanaga, the Grassfield web browser"
+arch=(x86_64)
+url="https://github.com/grassfieldhq/sanaga"
+license=(MIT)
+# packaging/DISTRIBUTIONS.md of the pinned source: the window and the engine, the engine's page sandbox (without bubblewrap
+# and xdg-dbus-proxy pages run unsandboxed: a default browser must depend on both), the codecs (so Sanaga never offers to
+# install them: SANAGA_DISTRO below), the system keyring (secret-tool), xdg-utils. wayland, libxkbcommon and libglvnd are
+# what eframe's winit and glow open at run time (dlopen, so the binary's NEEDED list does not show them).
+depends=(
+  gtk4
+  webkitgtk-6.0
+  bubblewrap
+  xdg-dbus-proxy
+  hicolor-icon-theme
+  gstreamer
+  gst-plugins-base
+  gst-plugins-good
+  gst-plugins-bad
+  gst-libav
+  gst-plugin-va
+  libsecret
+  xdg-utils
+  wayland
+  libxkbcommon
+  libglvnd
+)
+optdepends=(
+  'ffmpeg: video recording of the mobile simulator'
+  'chromium: sites that need Widevine (Netflix, Disney+, Spotify web), opened from Sanaga'
+  'libxkbcommon-x11: Sanaga on an X11 session'
+  'libx11: Sanaga on an X11 session'
+)
+makedepends=(rust)
+provides=(sanaga)
+conflicts=(sanaga)
+# makepkg's link-time optimisation breaks the C parts of Rust crates; the debug package is not part of the channel.
+options=(!lto !debug)
+source=("$pkgname-$_commit.tar.gz::https://github.com/grassfieldhq/$_app/archive/$_commit.tar.gz")
+sha256sums=('bf0ee5326e7fa40ae4481ffbb9489526cf2759ae80b45774eef6f6a94f5d7b9b')
+
+prepare() {
+  cd "$srcdir/$_app-$_commit"
+  local v
+  v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+  [[ $v == "$_cargover" ]] || { echo "Cargo.toml says $v, this PKGBUILD says $_cargover: use scripts/bump-app.sh" >&2; return 1; }
+  # The only network step: the crates named, with their checksums, by Cargo.lock.
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/$_app-$_commit"
+  export CARGO_TARGET_DIR=target
+  # The codecs are dependencies of this package: Sanaga never offers to install them (packaging/DISTRIBUTIONS.md).
+  export SANAGA_DISTRO=grassfield
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$srcdir/$_app-$_commit"
+  export CARGO_TARGET_DIR=target
+  export SANAGA_DISTRO=grassfield
+  cargo test --frozen --release
+}
+
+# Third-party licences: the crates linked into the binary with their versions and licence expressions (cargo's own metadata
+# through `cargo tree`, no extra tool), and the licence texts that ship inside the font crates (OFL, UFL and the like).
+# The legal review is the owner's; this only lists what Cargo.lock brings. Called from package() in the source directory.
+_licenses() { # outdir
+  local out=$1 host line name ver lic d f
+  host=$(rustc -vV | sed -n 's/host: //p')
+  install -dm755 "$out"
+  {
+    printf 'Third-party crates of %s %s: name, version, licence expression (from Cargo.lock, by cargo tree).\n' "$pkgname" "$pkgver"
+    printf 'The licence texts of the fonts it embeds are in the fonts/ folder beside this file.\n\n'
+    cargo tree --frozen --offline -e normal --target "$host" --prefix none --format '{p}|{l}' |
+      sed -e 's/ (\*)$//' -e 's/ ([^|]*)|/|/' -e 's/^\([^ ]*\) v\([^|]*\)|/\1 \2  /' | LC_ALL=C sort -u
+  } >"$out/THIRD-PARTY-LICENSES.txt"
+  while IFS= read -r line; do
+    name=${line%% *} ver=${line#* } ver=${ver%%  *} lic=${line#*  }
+    [[ $name == *font* || $lic == *OFL* || $lic == *UFL* || $lic == *Ubuntu-font* || $lic == *LicenseRef* ]] || continue
+    for d in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$name-$ver"; do
+      [[ -d $d ]] || continue
+      for f in "$d"/LICENSE* "$d"/COPYING* "$d"/OFL* "$d"/UFL* "$d"/fonts/*.txt; do
+        if [[ -f $f ]]; then install -Dm644 "$f" "$out/fonts/$name-$ver/${f##*/}"; fi
+      done
+    done
+  done < <(sed -n '/^$/,$p' "$out/THIRD-PARTY-LICENSES.txt" | grep -v '^$')
+}
+
+package() {
+  cd "$srcdir/$_app-$_commit"
+  install -Dm755 target/release/sanaga "$pkgdir/usr/bin/sanaga"
+  install -Dm644 packaging/sanaga.desktop "$pkgdir/usr/share/applications/sanaga.desktop"
+  install -Dm644 packaging/sanaga.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/sanaga.svg"
+  local s
+  for s in 48 64 128 256 512; do
+    install -dm755 "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps"
+    target/release/sanaga --export-icon "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/sanaga.png" "$s"
+  done
+  install -Dm644 packaging/site.grassfield.Sanaga.metainfo.xml "$pkgdir/usr/share/metainfo/site.grassfield.Sanaga.metainfo.xml"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  _licenses "$pkgdir/usr/share/licenses/$pkgname"
+}

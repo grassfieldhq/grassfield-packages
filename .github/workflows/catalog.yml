@@ -32,6 +32,10 @@ jobs:
       - name: Unit tests (throwaway keys, made in this container)
         run: python3 -I -m unittest discover -s tests -v
 
+      - name: The bundled apps' pins are on their main and their checksums are GitHub's (bump-app.sh --verify, network, no secret)
+        run: |
+          for app in grassfield-sanaga grassfield-notes; do bash scripts/bump-app.sh --verify "$app"; done
+
       - name: Validate the sources
         run: python3 -I tools/catalog.py validate
 

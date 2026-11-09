@@ -33,12 +33,36 @@ There is no opt-in for release builds.
 - ccache (`GRASSFIELD_CCACHE_DIR`): compiler wrappers first in makepkg's PATH (what makepkg's `ccache` BUILDENV does),
   `CCACHE_COMPILERCHECK=content`, `CCACHE_BASEDIR=/build`, 2 GB. PKGBUILD is untouched.
 - pacman cache: `/var/cache/pacman/pkg` is a mounted folder, key `pacman-dev-<image digest>-<hash of pacman.conf,
-  build-channel.sh, PKGBUILD>`, saved with the hash of the final listing appended only when the listing changed;
+  build-channel.sh, the two bundled apps' PKGBUILDs, PKGBUILD>`, saved with the hash of the final listing appended only when the listing changed;
   `pacman -Sc` afterwards leaves this build's package set. pacman still verifies each cached package (checksum from the
   database, signature) at install, which protects against a bad package, not against the other files of an entry: that is
   why release-capable runs do not use it.
 - data products (`GRASSFIELD_DATA_CACHE`): plumbing only, see below.
 - Entries are visible to the branch that saved them. GitHub also lets a branch read main's entries; main saves none.
+
+## The bundled apps (Rust)
+
+`grassfield-sanaga` and `grassfield-notes` (README.md, "Bundled apps") are compiled by `cargo build --frozen --release`
+inside `build-channel.sh`, after the pacman step. What a cache could hold, and why none is added:
+- the compiled crates (`target/`): ccache does not see rustc, and a Rust cache needs sccache or a saved `target/`, a new
+  dependency in the build container and a bigger unpacked-by-`tar -P` entry than anything above; not added;
+- the crate downloads (`CARGO_HOME`, keyed on the pinned source's `Cargo.lock`, which the pinned commit in each `PKGBUILD`
+  fixes): about 300 crates, around a minute; `cargo fetch --locked` checks each against `Cargo.lock`'s checksum. The gain is
+  small against one more restored entry, so none is added. If the owner wants it, it is one more `actions/cache` step under
+  the same `USE_CACHE` guard with the key `cargo-dev-<digest>-<hash of the two PKGBUILDs>`, and nothing else changes.
+The rule above holds: a run that can reach the release job restores nothing, so a release build compiles both apps from
+scratch. The pacman cache key covers the apps' `PKGBUILD`s because their `depends` and `makedepends` are in the package set.
+A tag whose apps are unchanged still rebuilds them in the build job (the build job holds no storage credentials, and the
+throwaway key cannot sign what the release job takes from the bucket); the release job then uses the published packages
+as they are (`sign-release.sh prepare --published`). Seeding the build's tree with the published apps is a possible later
+step, with its own review (a package signed by the project's key entering a build that holds none).
+
+## The repack container (bundled apps) and its image
+
+`scripts/app-repack.sh` runs with no network, so no cache or download can reach it, and the libarchive and zstd it uses are
+those of the pinned image (`IMAGE`, an `archlinux:base` digest). They age: refresh the digest when Arch publishes a libarchive
+or zstd security fix (the tracker lists them). No scheduled job does it; the integrator does, in `build.yml` and the other
+files that name the digest (README.md, "Bundled apps"). The version used is printed in the log of each repack step.
 
 ## Compression (point 3)
 
