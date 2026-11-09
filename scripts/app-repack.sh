@@ -17,7 +17,8 @@
 #   0. which format is parsed: zstd alone decompresses the file to a plain one (under a size cap), and that must BE a tar: a
 #      valid checksum on the first 512-byte header and "ustar" at offset 257 (so libarchive's tar reader is the highest
 #      bidder and no cpio, zip, 7-Zip or further compression is ever handed to it); GNU tar must list the same members.
-#      Then libarchive's own report on that file must be an uncompressed POSIX ustar or pax tar (it decides on decompression
+#      Before any libarchive call the first header's name must itself be one of the app's paths (no filter or format signature can
+#      be one). Then libarchive's own report on that file must be an uncompressed POSIX ustar or pax tar (it decides on decompression
 #      before the format: a first block that is both a tar and a gzip header would be read as gzip and cpio), and GNU tar must
 #      read it with exit status 0.
 #   1. `bsdtar -tf` lists the members: no path twice (.PKGINFO included), every path one of the app's own, with every segment
@@ -82,7 +83,9 @@ if [[ $stage == root ]]; then
     # Whatever the unprivileged stage left running (it could race the install below, or outlive this script in the signing
     # container) is killed before root reads anything it wrote.
     pkill -KILL -u 65534 || true
-    ! pgrep -u 65534 >/dev/null || die "a process of the unprivileged user survives"
+    # (A zombie is no process that can act: in a container whose PID 1 reaps nothing an exited child of the stage stays listed
+    # as Z, and must not refuse every later repack.)
+    if ps -u 65534 -o stat= 2>/dev/null | grep -q '^[^Z]'; then die "a process of the unprivileged user survives"; fi
     ((rc == 0)) || exit "$rc"
   fi
   [[ -f $work/$file && ! -L $work/$file ]] || die "the unprivileged stage wrote no $file"
@@ -117,6 +120,11 @@ want=$(head -c 154 "$plain" | tail -c 6)
 have=$(od -An -v -tu1 -N512 "$plain" | awk '{ for (i = 1; i <= NF; i++) { n++; v = $i; if (n > 148 && n <= 156) v = 32; s += v } } END { print s }')
 [[ $want =~ ^[0-7]{6}$ ]] && ((8#$want == have)) || die "the first tar header's checksum is not valid: not a tar archive"
 
+# Before ANY libarchive call: the first header's name field (bytes 0-99, up to the NUL) must be one of the app's own paths. No filter
+# or format signature (gzip, bzip2, xz, lzma, lzip, lz4, zstd, lzop, compress, uuencode, rpm, cpio, zip, 7-Zip...) can also be a valid
+# first member name such as .BUILDINFO or usr/, so the probe below cannot be made to read something else.
+first=$(head -c 100 "$plain" | tr '\0' '\n' | head -n 1)
+app_path_ok "$app" "$first" || die "the first member's name is not one of this app's paths (not a package of ours: $(printf %q "${first:0:40}"))"
 # libarchive decides on decompression before it looks at the format, so a first block that is both a tar header and a gzip header
 # can be gunzipped and read as cpio: ask libarchive itself what it sees in the plain file, and refuse anything but a POSIX
 # ustar or pax tar with no compression; GNU tar must read the file as a tar too (exit status 0).
@@ -145,11 +153,12 @@ cd "$tree"
 [[ -z $(find . -mindepth 1 ! -type f ! -type d -print -quit) ]] || die "not only regular files and folders: $(find . -mindepth 1 ! -type f ! -type d -print -quit)"
 [[ -z $(find . -perm /7022 -print -quit) ]] || die "a setuid, setgid or sticky bit, or a group- or world-writable mode: $(find . -perm /7022 -print -quit)"
 [[ -z $(getfattr -R -h -d -m - . 2>&1) ]] || die "extended attributes on the extracted tree"
+find . -mindepth 1 -print0 >"$work/paths0"
 while IFS= read -r -d '' p; do
   p=${p#./}
   [[ -d ./$p ]] && p+=/
   app_path_ok "$app" "$p" || die "a path that is not this app's, or with a character outside [A-Za-z0-9._@+-]: $p"
-done < <(find . -mindepth 1 -print0)
+done <"$work/paths0"
 [[ -f .PKGINFO && -f .BUILDINFO && -f usr/bin/$bin && -f usr/share/applications/$bin.desktop ]] || die "no .PKGINFO, .BUILDINFO, binary or .desktop file"
 
 # 4a. The text files of the original are only compared, never carried over.
@@ -181,9 +190,10 @@ generated_fields() {
   val optdepends | sed 's/^/optdepend = /'
 }
 compared='pkgname|pkgver|pkgdesc|url|arch|license|provides|conflict|depend|optdepend'
-a=$(grep -E "^($compared) = " .PKGINFO | sort)
-b=$(generated_fields | grep -E "^($compared) = " | sort)
-[[ $a == "$b" ]] || die ".PKGINFO is not what $app/PKGBUILD says: $(comm -3 <(echo "$b") <(echo "$a") | tr -s '\n\t' '  ' | cut -c1-300)"
+grep -E "^($compared) = " .PKGINFO | sort >"$work/pkginfo.original"
+generated_fields | grep -E "^($compared) = " | sort >"$work/pkginfo.generated"
+cmp_lists() { [[ $(<"$work/pkginfo.original") == "$(<"$work/pkginfo.generated")" ]]; }
+cmp_lists || die ".PKGINFO is not what $app/PKGBUILD says: $(comm -3 "$work/pkginfo.generated" "$work/pkginfo.original" | tr -s '\n\t' '  ' | cut -c1-300)"
 other=$(grep -vE '^(#.*|)$' .PKGINFO | grep -vE "^($compared|pkgbase|xdata|builddate|packager|size|makedepend|checkdepend|pkgtype) = " || true)
 [[ -z $other ]] || die ".PKGINFO holds a field that is not allowed: $(head -n 1 <<<"$other")"
 pkgbuild_sum=$(sha256sum <"$here/$app/PKGBUILD" | cut -d' ' -f1)

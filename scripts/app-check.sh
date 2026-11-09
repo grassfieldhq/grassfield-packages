@@ -36,7 +36,7 @@ self=$(cd "$(dirname "$0")" && pwd)
 source "$self/app-lib.sh"
 fail() { echo "app-check.sh: ${pkg##*/}: $*" >&2; exit 1; }
 "$self/pin-check.sh" "$src" || fail "$src/PKGBUILD is not pinned"
-read -r name ver < <(bash -c 'source "$1/PKGBUILD" >/dev/null 2>&1; printf "%s %s-%s\n" "$pkgname" "$pkgver" "$pkgrel"' _ "$src")
+read -r name ver <<<"$(bash -c 'source "$1/PKGBUILD" >/dev/null 2>&1; printf "%s %s-%s\n" "$pkgname" "$pkgver" "$pkgrel"' _ "$src")"
 [[ -n ${name:-} && -n ${ver:-} ]] || fail "cannot read $src/PKGBUILD"
 app_names "$name" || fail "$name is not a bundled app"
 
@@ -77,7 +77,13 @@ expected=$(bash -c 'source "$1/PKGBUILD" >/dev/null 2>&1
   for e in "${provides[@]}"; do printf "provides = %s\n" "$e"; done
   for e in "${conflicts[@]}"; do printf "conflict = %s\n" "$e"; done' _ "$src" | LC_ALL=C sort)
 actual=$(grep -E '^(depend|optdepend|provides|conflict) = ' <<<"$info" | LC_ALL=C sort)
-[[ $actual == "$expected" ]] || fail "its dependency lines are not $src/PKGBUILD's: $(LC_ALL=C comm -3 <(echo "$expected") <(echo "$actual") | tr -s '\n\t' '  ')"
+if [[ $actual != "$expected" ]]; then
+  # (files, not process substitution: no child may be left behind when this exits)
+  d=$(mktemp -d)
+  echo "$expected" >"$d/e"
+  echo "$actual" >"$d/a"
+  fail "its dependency lines are not $src/PKGBUILD's: $(LC_ALL=C comm -3 "$d/e" "$d/a" | tr -s '\n\t' '  ')"
+fi
 
 # .BUILDINFO: built from this very PKGBUILD.
 build=$(bsdtar -xOf "$pkg" .BUILDINFO 2>/dev/null) || fail "no .BUILDINFO"
