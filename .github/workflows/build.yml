@@ -96,7 +96,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: cache/pacman
-          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'grassfield/packaging/arch/PKGBUILD') }}
+          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'packages/grassfield-sanaga/PKGBUILD', 'packages/grassfield-notes/PKGBUILD', 'grassfield/packaging/arch/PKGBUILD') }}
           restore-keys: |
             pacman-dev-${{ steps.mode.outputs.digest }}-
       - name: Restore the ccache folder
@@ -179,7 +179,7 @@ jobs:
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: cache/pacman
-          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'grassfield/packaging/arch/PKGBUILD') }}-${{ steps.after.outputs.listing }}
+          key: pacman-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('packages/build/pacman.conf', 'packages/scripts/build-channel.sh', 'packages/grassfield-sanaga/PKGBUILD', 'packages/grassfield-notes/PKGBUILD', 'grassfield/packaging/arch/PKGBUILD') }}-${{ steps.after.outputs.listing }}
       - name: Save the ccache folder
         if: success() && env.USE_CACHE == 'true'
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
