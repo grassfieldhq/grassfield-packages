@@ -11,8 +11,9 @@
 #   - the dependencies are installed here AS ROOT first (pacman -S of the PKGBUILD's depends, makedepends, checkdepends);
 #   - then makepkg (without -s: it never calls pacman) runs as `builder`, who has NO sudoers entry, in a fresh HOME with a
 #     scrubbed environment (nothing of the CI job's);
-#   - only the package file leaves, through --out; build-channel.sh (another container) takes it through
-#     scripts/app-ingest.sh and scripts/app-check.sh before it signs or installs anything (no scriptlet, allowed paths only).
+#   - only the package file leaves, through --out, and it is NOT trusted: scripts/app-repack.sh (a third container, no network)
+#     rebuilds it from a tree libarchive extracted, and only that repacked file reaches build-channel.sh, which takes it through
+#     scripts/app-ingest.sh and scripts/app-check.sh before it signs or installs anything.
 # Before anything is built: scripts/pin-check.sh (the PKGBUILD's pin) and `bump-app.sh --verify` (the pin is on the app's
 # main and the archive's checksum is the one the PKGBUILD says; this container has the network).
 # The network stays on: pacman, `cargo fetch --locked` in prepare() and the source download need it, and one container
@@ -41,7 +42,7 @@ echo "== the package set of an Omarchy stable machine (build/pacman.conf), as bu
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 { pacman-key --init && pacman-key --populate archlinux; } >>"$log" 2>&1 || die "pacman-key (see $log)"
 "$here/scripts/omarchy-trust.sh" 2>>"$log" || die "cannot trust [omarchy]'s signer (see $log)"
-pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu python >>"$log" 2>&1 || { tail -n 20 "$log"; die "pacman -Syu (see $log)"; }
+pacman -Syu --noconfirm --needed base-devel git diffutils ttf-dejavu >>"$log" 2>&1 || { tail -n 20 "$log"; die "pacman -Syu (see $log)"; }
 mkdir -p /etc/makepkg.conf.d
 printf 'COMPRESSZST=(zstd -c -T0 -3 -)\n' >/etc/makepkg.conf.d/grassfield.conf
 

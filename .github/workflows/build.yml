@@ -127,8 +127,22 @@ jobs:
             docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/apps/$app:/out" "$IMAGE" \
               /packages/scripts/build-app.sh --app "$app" --out /out
           done
+      # The package file an app container wrote is NOT trusted (third-party build code could have written it: an extended
+      # attribute, a second .PKGINFO, a header only libarchive reads). A third container, with no network and only this
+      # repository, the package (read-only) and an output folder, extracts it with libarchive (no xattrs, ACLs or flags),
+      # checks the tree on the filesystem, and rebuilds the package canonically (scripts/app-repack.sh). Only that file goes on.
+      - name: Repack each app package canonically (no network; only the repacked file leaves)
+        run: |
+          set -euo pipefail
           mkdir -p apps/all
-          cp apps/grassfield-sanaga/*.pkg.tar.zst apps/grassfield-notes/*.pkg.tar.zst apps/all/
+          for app in grassfield-sanaga grassfield-notes; do
+            mkdir -p "apps/repacked/$app"
+            [ "$(ls "apps/$app" | wc -l)" = 1 ] || { echo "::error::apps/$app must hold exactly one file"; exit 1; }
+            f=$(ls "apps/$app")
+            docker run --rm --network none -v "$PWD/packages:/packages:ro" -v "$PWD/apps/$app:/in:ro" -v "$PWD/apps/repacked/$app:/out" "$IMAGE" \
+              /packages/scripts/app-repack.sh --app "$app" --in "/in/$f" --out /out
+          done
+          cp apps/repacked/grassfield-sanaga/*.pkg.tar.zst apps/repacked/grassfield-notes/*.pkg.tar.zst apps/all/
       - name: Build in a throwaway Arch container with Omarchy stable's package set, signed by a throwaway key
         env:
           REF: ${{ inputs.ref }}

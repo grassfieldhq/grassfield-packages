@@ -25,7 +25,8 @@
 # installing grassfield-keyring, which grassfield-desktop depends on, and after taking and installing (--noscriptlet) the
 # bundled apps grassfield-sanaga and grassfield-notes (grassfield-sanaga/, grassfield-notes/ here: Rust apps pinned to one
 # commit each, ADR-0055 in grassfield), which it depends on too. The apps are never built or run in this container:
-# scripts/build-app.sh built each in a container of its own, and only the checked package comes in (--apps).
+# scripts/build-app.sh built each in a container of its own and scripts/app-repack.sh rebuilt each package canonically in
+# another, with no network; only that repacked package comes in (--apps), and app-check.sh looks at it once more.
 #
 # The tree:
 #   releases/<channel>/<packages version>/   the release build, what the channel's one serialized publisher reads
@@ -127,7 +128,7 @@ install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 # order under --noconfirm): qt6-webengine's ttf-font would be [omarchy]'s 152 MB maplemono-nf-cn. A font of [extra] is
 # installed first; mesa is opengl-driver's provider because every depends array names it first. Which packages came from
 # [omarchy] is printed after makepkg.
-base_set=(base-devel git diffutils ttf-dejavu python)  # python: scripts/app-check.sh reads the apps' pax headers
+base_set=(base-devel git diffutils ttf-dejavu)
 [[ -z $ccache_dir ]] || base_set+=(ccache)
 pacman -Syu --noconfirm --needed "${base_set[@]}" >>"$log" 2>&1 ||
   die "pacman -Syu ${base_set[*]} (see $log)"
