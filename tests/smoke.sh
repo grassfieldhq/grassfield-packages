@@ -27,6 +27,10 @@ done
 fails=0 checks=0
 expect() { local d=$1; shift; checks=$((checks + 1)); if "$@"; then echo "PASS: $d"; else echo "FAIL: $d"; fails=$((fails + 1)); fi; }
 log=/tmp/smoke.log
+# `pacman -Q NAME` also answers for a package that PROVIDES NAME (pacman -Q sh prints bash), so "no package named sanaga" is
+# the other way round: pacman -Qq NAME names the package that answers, which must be the one expected (tests/test_apps.py
+# runs this function against a fake pacman, both ways).
+only_provided_by() { [[ $(pacman -Qq "$1" 2>/dev/null) == "$2" ]]; }
 
 install -m644 "$here/build/pacman.conf" /etc/pacman.conf
 # [omarchy] comes first (an Omarchy stable machine): its signer is trusted the way the build trusts it, by Omarchy's pinned
@@ -65,7 +69,7 @@ expect "the apps' contract: /usr/bin/sanaga, /usr/bin/grassfield-notes, their .d
     test -f /usr/share/icons/hicolor/256x256/apps/grassfield-notes.png && pacman -Qqo /usr/bin/sanaga | grep -qx grassfield-sanaga &&
     pacman -Qi grassfield-sanaga | grep -q "^Provides *: sanaga$"'
 expect "pacman -Q: grassfield-sanaga and grassfield-notes from the channel ($(pacman -Q grassfield-sanaga grassfield-notes 2>/dev/null | tr '\n' ' '))" \
-  bash -c 'pacman -Q grassfield-sanaga grassfield-notes >/dev/null && ! pacman -Q sanaga >/dev/null 2>&1'
+  bash -c "$(declare -f only_provided_by); pacman -Q grassfield-sanaga grassfield-notes >/dev/null && only_provided_by sanaga grassfield-sanaga"
 expect "quickshell installed from [omarchy] (trusted by its pinned fingerprint): $(pacman -Q quickshell 2>/dev/null)" \
   bash -c 'pacman -Sl omarchy 2>/dev/null | awk '"'"'$2 == "quickshell" { print $3 }'"'"' | grep -qx -- "$(pacman -Q quickshell | cut -d" " -f2)"'
 useradd -m smoke
