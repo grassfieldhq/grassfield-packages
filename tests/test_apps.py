@@ -310,12 +310,14 @@ def pax_block(records):
     return tar_block("PaxHeader/x", data, typeflag=b"x")
 
 
-def raw_package(out, members, name="x"):
+def raw_package(out, members, name="x", lead=()):
     """A package from a list of (path, data[, opts]) where opts may hold tar_block keywords and 'pax' (a dict written
     before the member), the folders first. Returns the .pkg.tar.zst path."""
     blob = b""
     seen = set()
     enc = lambda x: x if isinstance(x, bytes) else x.encode()
+    for item in lead:  # first in the archive, before the folders
+        blob += tar_block(enc(item[0]), item[1])
     for item in members:
         parts = enc(item[0]).split(b"/")[:-1]
         for i in range(1, len(parts) + 1):
@@ -702,6 +704,10 @@ class Repack(unittest.TestCase):
     def members(self):
         return read_members(fake_package(self.tmp, self.APP))
 
+    def assertRepacked(self, result):
+        """The repack succeeded; if not, the failure message is its own output (CI shows no stderr otherwise)."""
+        self.assertEqual(result.returncode, 0, f"stdout: {result.stdout}\nstderr: {result.stderr}")
+
     def repack(self, pkg, out=None):
         out = out or self.out
         out.mkdir(exist_ok=True)
@@ -732,10 +738,10 @@ class Repack(unittest.TestCase):
         self.proven_clean(self.out / pkg.name)
         # Repacking the repacked file, and the original again, gives the same bytes: equal input, equal canonical output.
         other = self.tmp / "out2"
-        self.assertEqual(self.repack(pkg, other).returncode, 0)
+        self.assertRepacked(self.repack(pkg, other))
         self.assertEqual((other / pkg.name).read_bytes(), first)
         third = self.tmp / "out3"
-        self.assertEqual(self.repack(self.out / pkg.name, third).returncode, 0)
+        self.assertRepacked(self.repack(self.out / pkg.name, third))
         self.assertEqual((third / pkg.name).read_bytes(), first)
         # .MTREE is regenerated: gzip, makepkg's keywords, the binary's sha256.
         mtree = subprocess.run(["bash", "-c", 'bsdtar -xOf "$1" .MTREE | gzip -dc', "_", str(self.out / pkg.name)],
@@ -751,12 +757,12 @@ class Repack(unittest.TestCase):
     def test_normal_modes_and_owners_come_out_canonical(self):
         members = [(m[0], m[1], {"mode": 0o600}) if m[0].endswith(".desktop") else (m[0], m[1]) for m in self.members()]
         pkg = self.named(members)
-        self.assertEqual(self.repack(pkg).returncode, 0)
+        self.assertRepacked(self.repack(pkg))
         self.proven_clean(self.out / pkg.name)
 
-    def named(self, members):
+    def named(self, members, lead=()):
         av = f"{var(self.APP, 'pkgver')}-{var(self.APP, 'pkgrel')}"
-        pkg = raw_package(self.tmp, members, name="tmp")
+        pkg = raw_package(self.tmp, members, name="tmp", lead=lead)
         named = self.tmp / f"{self.APP}-{av}-x86_64.pkg.tar.zst"
         shutil.copy(pkg, named)
         return named
@@ -778,18 +784,20 @@ class Repack(unittest.TestCase):
                 out.append((path, data))
         return self.named(out)
 
-    @unittest.skipUnless(ROOT_IN_CONTAINER, NOT_VERIFIED)
-    def test_a_bad_mtime_header_with_an_xattr_behind_it_comes_out_clean(self):
+    def test_a_bad_mtime_header_with_an_xattr_behind_it_is_refused(self):
+        """The review's variant: tarfile stops at the bad mtime field, libarchive goes on and applies the xattr behind it. GNU tar
+        also stops (exit status 2), and step 0 now requires GNU tar to read the file with exit status 0: refused, before any
+        extraction. (Fifth and sixth reviews: it once came out clean; refusing it is the stricter, intended outcome.)"""
         pkg = self.hidden_xattr()
-        # The original, extracted the way pacman can (xattrs enabled): the attribute is applied. Where the filesystem takes
-        # no user xattr the control shows nothing, and the assertion below still holds.
+        # The control: libarchive, extracting the original with xattrs enabled, does apply the attribute behind the bad header.
         ctl = self.tmp / "ctl"
         ctl.mkdir()
         subprocess.run(["bsdtar", "-xf", str(pkg), "-C", str(ctl), "--xattrs", "-p", "--no-same-owner"], capture_output=True)
         applied = subprocess.run(["getfattr", "-R", "-h", "-d", "-m", "-", str(ctl)], capture_output=True, text=True).stdout
         r = self.repack(pkg)
-        self.assertEqual(r.returncode, 0, f"(control: {applied!r}) {r.stderr}")
-        self.proven_clean(self.out / pkg.name)
+        self.assertEqual(r.returncode, 1, f"(control: {applied!r}) {r.stdout}{r.stderr}")
+        self.assertIn("GNU tar cannot read the plain file as a tar", r.stderr)
+        self.assertEqual(list(self.out.iterdir()), [])
 
     @unittest.skipUnless(ROOT_IN_CONTAINER, NOT_VERIFIED)
     def test_a_package_of_8_mib_with_an_xattr_comes_out_clean(self):
@@ -917,7 +925,7 @@ class Repack(unittest.TestCase):
         # The refusal is libarchive's own report or GNU tar's exit status, not only a later rule.
         poly = self.zstd_of("which_reader", both_headers(cpio, tar_bytes))
         r = self.repack(poly)
-        self.assertRegex(r.stderr, r"libarchive does not read the plain file as an uncompressed POSIX tar|GNU tar cannot read|checksum")
+        self.assertRegex(r.stderr, r"first member's name is not one of this app's paths|libarchive does not read the plain file as an uncompressed POSIX tar|GNU tar cannot read|checksum")
 
     def test_step_zero_reads_libarchives_own_report_and_gnu_tars_exit_status_and_zstds(self):
         body = text("scripts/app-repack.sh")
@@ -956,7 +964,7 @@ class Repack(unittest.TestCase):
         self.assertIn("is not what", r.stderr)
         # A clean package: the result's .PKGINFO is the generated one (its own comment, packager and size), never the original.
         pkg = fake_package(self.tmp, self.APP)
-        self.assertEqual(self.repack(pkg).returncode, 0)
+        self.assertRepacked(self.repack(pkg))
         info = subprocess.run(["bsdtar", "-xOf", str(self.out / pkg.name), ".PKGINFO"], capture_output=True, text=True).stdout
         self.assertIn("# Generated by app-repack.sh", info)
         self.assertIn("packager = Grassfield", info)
@@ -975,14 +983,14 @@ class Repack(unittest.TestCase):
             with self.subTest(why):
                 self.refused([(m[0], new) if m[0] == ".BUILDINFO" else (m[0], m[1]) for m in members], why)
         pkg = self.named(members)
-        self.assertEqual(self.repack(pkg).returncode, 0)
+        self.assertRepacked(self.repack(pkg))
         build = subprocess.run(["bsdtar", "-xOf", str(self.out / pkg.name), ".BUILDINFO"], capture_output=True, text=True).stdout
         self.assertEqual(sorted(line.split(" = ")[0] for line in build.splitlines()),
                          sorted(["format", "pkgname", "pkgbase", "pkgver", "pkgarch", "pkgbuild_sha256sum", "packager", "builddate"]))
 
     def test_the_output_is_owned_by_root_by_construction(self):
         pkg = fake_package(self.tmp, self.APP)
-        self.assertEqual(self.repack(pkg).returncode, 0)
+        self.assertRepacked(self.repack(pkg))
         listing = subprocess.run(["bsdtar", "-tvf", str(self.out / pkg.name)], capture_output=True, text=True).stdout
         self.assertTrue(all(len(line.split()) > 3 and line.split()[2:4] == ["root", "root"] for line in listing.splitlines()))
 
@@ -999,7 +1007,7 @@ class Repack(unittest.TestCase):
         """Fifth review: the signed file must not depend on the repack container alone; where it is signed, the file is repacked
         again and must be identical."""
         pkg = fake_package(self.tmp, self.APP)
-        self.assertEqual(self.repack(pkg).returncode, 0)
+        self.assertRepacked(self.repack(pkg))
         good = self.out / pkg.name
         r = self.reverify(good)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, f"reverified {pkg.name}"), r.stderr)
@@ -1031,6 +1039,51 @@ class Repack(unittest.TestCase):
         self.assertIn('app-reverify.sh" --app "$name" --in "$pkg"', ingest)
         self.assertLess(ingest.index("app-reverify.sh"), ingest.index('sign "$pkg"'))
         self.assertLess(ingest.index("app-reverify.sh"), ingest.index("pacman -U --noscriptlet"))
+
+    def test_a_refused_repack_leaves_nothing_behind_for_the_next_one(self):
+        """Sixth review: in a CI container nothing reaps orphans, and a leftover of a refused repack (a zombie of uid 65534) must not
+        refuse the next, clean one. One refusal after another, then a clean package, in the same container."""
+        for extra in ("license = GPL\n", "license = MIT\x1b[2J\n"):
+            r = self.repack(fake_package(self.tmp, self.APP, extra_info=extra))
+            self.assertEqual(r.returncode, 1, r.stderr)
+        made = fake_package(self.tmp, self.APP)
+        (self.tmp / "keep").mkdir()
+        clean = self.tmp / "keep" / made.name  # the refused ones are written under the same name: keep a copy apart
+        shutil.copy(made, clean)
+        self.assertRepacked(self.repack(clean))
+        self.assertTrue((self.out / clean.name).is_file())
+        # and the refusal that builds its message from two lists, once more, then a clean one again
+        self.assertEqual(self.repack(fake_package(self.tmp, self.APP, extra_info="depend = evil\n")).returncode, 1)
+        self.assertRepacked(self.repack(clean))
+
+    def test_the_unprivileged_stage_forks_no_background_job_and_the_survivor_check_ignores_zombies(self):
+        body = text("scripts/app-repack.sh")
+        user_stage = code(body[body.index("# ---- the unprivileged stage"):])
+        self.assertNotIn("<(", user_stage)  # no process substitution: no child left behind when the stage dies
+        self.assertNotRegex(user_stage, r"&\s*$|\bcoproc\b|\bdisown\b|\bnohup\b")
+        self.assertNotIn("<(", code(text("scripts/app-check.sh")))
+        self.assertIn("ps -u 65534 -o stat= 2>/dev/null | grep -q '^[^Z]'", body)
+        self.assertNotIn("pgrep", code(body))
+
+    def test_the_first_header_name_is_checked_before_any_libarchive_call(self):
+        body = code(text("scripts/app-repack.sh"))
+        probe = body.index('app_path_ok "$app" "$first"')
+        self.assertLess(probe, body.index("bsdtar -tvvf"))
+        self.assertLess(probe, body.index('bsdtar -tf "$plain"'))
+        # A package whose first member is not the app's own path, though it is a valid tar in every other way, is refused at the
+        # probe; one whose first member is an allowed path goes on (every package of ours starts with .BUILDINFO or usr/).
+        members = self.members()
+        for first in ("evil/x", "etc/passwd", "x"):
+            with self.subTest(first):
+                r = self.repack(self.named(members, lead=[(first, b"x")]))
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn("first member's name is not one of this app's paths", r.stderr)
+        # A gzip or other filter signature as the first header's name is no allowed path either.
+        for sig in (b"\x1f\x8b\x08", b"BZh9", b"\xfd7zXZ\x00", b"\x04\x22\x4d\x18", b"begin 644 x"):
+            with self.subTest(sig):
+                r = self.repack(self.named(members, lead=[(sig, b"x")]))
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn("first member's name is not one of this app's paths", r.stderr)
 
     def test_the_script_runs_only_as_root_in_a_container(self):
         body = text("scripts/app-repack.sh")
