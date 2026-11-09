@@ -36,8 +36,8 @@ catalog of Grassfield Store.
 | `tools/publish.py` | the one serialized publisher of a channel (ADR-0033 h.2, ADR-0037 g): from the current snapshot, the newest release build and the catalog of `main`'s head, never backwards, immutable names, the pointer written only if it has not moved; ADR-0033 h.2's deliberate rollback (`--rollback-to`). Run by `publish.yml` against the bucket (`S3Store`, through `aws s3api`); the tests and the build's test trees use its local store |
 | `tools/catalog.py` | validates the sources, checks them against what they name, builds, signs and verifies the catalog (standard library) |
 | `tools/catalog-facts.sh` | gathers those facts in a throwaway Arch container: Omarchy's stable mirror, Arch's AppStream, Flathub |
-| `scripts/build-channel.sh` | one Grassfield tag or commit, built once → makepkg of grassfield's own PKGBUILD → signed packages → its **release build** for each channel it goes to (`releases/<channel>/<version>/`: packages, a database of this release alone, release notes, all signed), which the publisher reads → the channel tree made from them by `tools/publish.py`, for CI's artifact and the tests; grassfield-keyring is built once per version (reused only while it is still `keyring/`'s, the whole package); grassfield-sanaga and grassfield-notes are built in the same container before grassfield-desktop (which depends on them) and reused from the tree when signed by the key and built from the very PKGBUILD in git (`app-check.sh`); a release whose grassfield-desktop does not depend on grassfield-keyring is refused (grassfield ADR-0033 O22); throwaway keys only (it refuses to start beside the project's key) |
-| `scripts/bump-app.sh`, `scripts/app-check.sh` | `bump-app.sh <app> <commit>` moves an app's pin in one step (`--verify <app>` recomputes it from the network); `app-check.sh` is the reuse rule: a built package stands for a folder's PKGBUILD only if it records that PKGBUILD's SHA-256 |
+| `scripts/build-channel.sh` | one Grassfield tag or commit, built once → makepkg of grassfield's own PKGBUILD → signed packages → its **release build** for each channel it goes to (`releases/<channel>/<version>/`: packages, a database of this release alone, release notes, all signed), which the publisher reads → the channel tree made from them by `tools/publish.py`, for CI's artifact and the tests; grassfield-keyring is built once per version (reused only while it is still `keyring/`'s, the whole package); grassfield-sanaga and grassfield-notes come from `--apps`, built beforehand in a container each by `build-app.sh`, checked by `app-check.sh`, and reused from the tree when signed by the key and built from the very PKGBUILD in git; a release whose grassfield-desktop does not depend on grassfield-keyring is refused (grassfield ADR-0033 O22); throwaway keys only (it refuses to start beside the project's key) |
+| `scripts/bump-app.sh`, `scripts/app-check.sh` | `bump-app.sh <app> <commit>` moves an app's pin in one step (`--verify <app>` recomputes it from the network); `pin-check.sh` refuses an unpinned PKGBUILD; `build-app.sh` builds one app in its own container; `app-check.sh` and `app-ingest.sh` are the gate and the reuse rule between that container and the one that signs |
 | `scripts/omarchy-trust.sh` | `[omarchy]`'s package signer trusted in a throwaway container's pacman keyring as an Omarchy machine trusts it: the fingerprint Omarchy pins, the key fetched over HTTPS from keys.openpgp.org and used only if it is that one key alone; one step for `build-channel.sh` and `tests/smoke.sh` |
 | `scripts/sign-release.sh` | a tested release build signed with the project's key (the `release` job, disabled), in two steps so the key never meets anything that reads package contents: `prepare` without the key (a package already published used as it is, the keyring compared with `keyring/`, `repo-add`), `sign` with gpg only, on an allowlist of names |
 | `scripts/notes.py` | `grassfield-notes.json` from grassfield's `packaging/release-notes/<VERSION>.{en,fr}.txt`, with the channel's earlier releases from the tag's own repository |
@@ -67,12 +67,25 @@ depends on them (grassfield ADR-0055).
   browser's package is `grassfield-sanaga` and it provides `sanaga`, the name the desktop depends on.
   **A machine with a self-built `sanaga` package must remove it once** (`sudo pacman -Rns sanaga`), before the first update
   that brings `grassfield-sanaga`. The conflict is deliberate: without it both packages would own `/usr/bin/sanaga`.
-- **The source** is GitHub's archive tarball of the pinned commit with its SHA-256 in `sha256sums`, never a git source
-  (makepkg checks no checksum of a git source, it writes `SKIP`), a tag or a branch. If GitHub ever changed the bytes of an
-  archive, the build would fail on the checksum rather than package other bytes; `bump-app.sh --verify` shows it.
-- **The build**: `cargo fetch --locked` in `prepare()` (the only network step; crates are checked against `Cargo.lock`),
-  an offline `cargo build --frozen --release`, `check()` running `cargo test --frozen --release` (headless), then
-  `package()`. `makedepends=(rust)`; the run-time libraries of eframe (wayland, libxkbcommon, libglvnd) are named in
+- **The source** is GitHub's archive tarball of the pinned commit with its SHA-256 in `sha256sums`, never a tag or a
+  branch. makepkg can also checksum a git source pinned by `#commit=` (the SHA-256 of `git archive`), but that needs a clone
+  with its history and those bytes depend on the git version and `.gitattributes`; the archive is one file fetched over HTTPS and
+  checked before anything is extracted. The cost: it relies on GitHub keeping an archive's bytes stable. If it ever changed
+  them, the build would fail on the checksum rather than package other bytes, and `bump-app.sh --verify` shows it.
+  `scripts/pin-check.sh` refuses anything else in a `PKGBUILD`: a second source, `source_<arch>` or `sha256sums_<arch>`
+  arrays, `SKIP`, another checksum algorithm, `install=` or `replaces=`.
+- **The build, in a container of its own.** The apps run third-party code (800+ crates' build scripts and proc-macros, the
+  tests, the binaries `package()` runs). `scripts/build-app.sh` builds each app in a throwaway container with no sudoers
+  entry: the dependencies are installed there as root first, then `makepkg` (without `-s`) runs as an unprivileged user in a
+  fresh HOME with a scrubbed environment, after `pin-check.sh` and `bump-app.sh --verify`. Only the `.pkg.tar.zst` leaves.
+  It shares no user, HOME, SRCDEST or sudoers line with the container that builds `grassfield-desktop`, so a crate cannot
+  reach the build the project's key signs (review of PR #22). The network stays on in that container (`pacman`, the source
+  and `cargo fetch` need it, and one container cannot cut it for cargo alone): `--frozen` keeps cargo offline, but it is not
+  a barrier for a build script or a test.
+  `cargo fetch --locked` in `prepare()` (crates are checked against `Cargo.lock`), an offline `cargo build --frozen
+  --release`, `check()` running `cargo test --frozen --release` (headless), then `package()`, which also writes
+  `THIRD-PARTY-LICENSES.txt` (every linked crate, its version and licence expression, from `cargo tree`) and the licence
+  texts of the font crates under `/usr/share/licenses/<package>/`. The legal review of those licences is the owner's. `makedepends=(rust)`; the run-time libraries of eframe (wayland, libxkbcommon, libglvnd) are named in
   `depends` because they are opened with dlopen and show in no `NEEDED` list.
 - **The version**: `pkgver` = Cargo.toml's version + `.r<commits up to the pinned commit>` + `.g<first 7 hex of the commit>`,
   for example `0.4.0.r79.ga9e0e56` (Arch's form for a pinned non-tag commit; the count keeps versions ordered along `main`,
@@ -87,12 +100,19 @@ depends on them (grassfield ADR-0055).
   (and why: the security fixes, the version) and is reviewed: the reviewer runs `scripts/bump-app.sh --verify <app>` and gets
   the same version, count and checksum, and reads the app's diff between the two commits. Any other edit of a
   `PKGBUILD` is a new `pkgrel`.
-- **Reuse.** `build-channel.sh` builds both in the container it builds the desktop in, before it (the desktop's `makepkg -s`
-  needs them installed). A package of the same name already in the tree is used again, with its signature, only if the
-  key signed it and `scripts/app-check.sh` finds it built from this very `PKGBUILD` (`.BUILDINFO` records its SHA-256, and the
-  `PKGBUILD` holds the commit and the checksum); a changed `PKGBUILD` without a new `pkgrel` stops the build. The release job
-  already uses a package published under the same name as it is.
-- **Time.** A release build compiles both from scratch (no cache on a run that can reach the release job,
+- **What the desktop's container takes.** `build-channel.sh --apps DIR` never builds or runs an app: `scripts/app-ingest.sh`
+  takes the one file the PKGBUILD names, after `scripts/app-check.sh` passed it: a pinned PKGBUILD, only `.PKGINFO`,
+  `.BUILDINFO`, `.MTREE` and files under `usr/bin`, `usr/share/{applications,icons,licenses,metainfo,doc}` (so no `.INSTALL`, no
+  libalpm hook, no link, no setuid bit), the PKGBUILD's own dependency lines, and a `.BUILDINFO` recording the SHA-256 of this
+  very `PKGBUILD`. It signs the file and installs it with `--noscriptlet` for the desktop's `makepkg -s`; nothing of it runs.
+- **Reuse.** A package of the same name already in the tree is used again, with its signature, only if the key signed it and
+  `app-check.sh` finds it built from this very `PKGBUILD`; a changed `PKGBUILD` without a new `pkgrel` stops the build, and so
+  does `sign-release.sh prepare`: it runs `app-check.sh` on the app packages of the release, so the published package of
+  the same name that replaces a new build cannot hide a changed `PKGBUILD`. `--no-apps` exists for the end-to-end test of
+  older refs only.
+- **CI** runs `bump-app.sh --verify` for both apps (the pin is on the app's `main`, the checksum is GitHub's) in the check
+  job and again in each app's container.
+- **Time.** A release build compiles both from scratch, in their own containers before the desktop's (no cache on a run that can reach the release job,
   `docs/build-caches.md`): estimated at 15-25 minutes more for Sanaga (WebKitGTK bindings, thin LTO) and 10-15 for Notes on the 4-vCPU
   runner, on top of the 25-27 minutes of the desktop (measured here: Notes' release build and its 43 tests took about 15
   minutes on a laptop sharing its cores with another build; the first CI run gives the real figures).

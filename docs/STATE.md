@@ -421,6 +421,16 @@ Last updated: 2026-11-09
     records the PKGBUILD's SHA-256); `build-channel.sh` builds both before the desktop, signs, reuses, ships them in every
     release build; `tests/smoke.sh` installs them through grassfield-desktop's depends; `tests/test_apps.py` and a publisher
     test. No Rust cache added (docs/build-caches.md says why). `check-tree.sh`, `sign-release.sh`'s names unchanged.
+  - Review of PR #22 (FAIL) fixed: each app is built by `scripts/build-app.sh` in its own container (root installs the
+    dependencies, then makepkg without -s as an unprivileged user with no sudoers entry, a fresh HOME, a scrubbed
+    environment; only the package leaves); `build-channel.sh --apps DIR` takes it through `app-ingest.sh` and `app-check.sh`
+    (allowed paths only, no .INSTALL or hook, dependency lines, PKGBUILD hash) and installs it with `--noscriptlet`;
+    `pin-check.sh` reads every source and checksum array (architecture-suffixed ones too) and refuses install= and
+    replaces=; `sign-release.sh prepare` runs `app-check.sh` on the release's apps (a published package cannot hide a
+    changed PKGBUILD); CI runs `bump-app.sh --verify` (catalog.yml and in each app container); smoke.sh checks
+    `pacman -Qq sanaga` names grassfield-sanaga; each package ships THIRD-PARTY-LICENSES.txt and the font licence texts.
+    Open: the app containers keep the network (one container cannot cut it for cargo alone); the legal review of the
+    licences is the owner's; a release rebuilds both apps in CI each time.
 
 ## Tests run
 - O22 follow-up (`docs/evidence/o22-2026-10-27/`, on f678b7d / db904b8, grassfield 448a381 and 4b7aa31): unit tests 53
