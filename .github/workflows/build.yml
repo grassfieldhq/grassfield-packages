@@ -115,6 +115,20 @@ jobs:
         with:
           path: cache/data
           key: data-dev-${{ steps.mode.outputs.digest }}-${{ hashFiles('grassfield/packaging/arch/icon*', 'grassfield/packaging/arch/wallpaper*', 'grassfield/branding/icons/theme/**', 'grassfield/branding/cursors/**', 'grassfield/packaging/plymouth/**', 'grassfield/apps/wallpaper-tool/**') }}
+      # The bundled apps (ADR-0055) run third-party build code (800+ crates, their tests and binaries). Each is built in a
+      # container of its own, with no sudoers entry and no shared HOME or SRCDEST, and only the package file comes out (apps/<app>/).
+      # The desktop's container below takes those files after scripts/app-check.sh and runs nothing from them; it has no
+      # key either way (the throwaway key is made there), and the release job signs with the project's key elsewhere.
+      - name: Build each bundled app in its own throwaway container (nothing privileged while cargo runs; only the package leaves)
+        run: |
+          set -euo pipefail
+          for app in grassfield-sanaga grassfield-notes; do
+            mkdir -p "apps/$app"
+            docker run --rm -v "$PWD/packages:/packages:ro" -v "$PWD/apps/$app:/out" "$IMAGE" \
+              /packages/scripts/build-app.sh --app "$app" --out /out
+          done
+          mkdir -p apps/all
+          cp apps/grassfield-sanaga/*.pkg.tar.zst apps/grassfield-notes/*.pkg.tar.zst apps/all/
       - name: Build in a throwaway Arch container with Omarchy stable's package set, signed by a throwaway key
         env:
           REF: ${{ inputs.ref }}
@@ -128,7 +142,7 @@ jobs:
               -v "$PWD/cache/ccache:/cache/ccache" -e GRASSFIELD_CCACHE_DIR=/cache/ccache
               -v "$PWD/cache/data:/cache/data" -e GRASSFIELD_DATA_CACHE=/cache/data)
           fi
-          docker run --rm -e REF -e PKGREL "${cache_args[@]}" -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/out:/out" \
+          docker run --rm -e REF -e PKGREL "${cache_args[@]}" -v "$PWD/packages:/packages:ro" -v "$PWD/grassfield:/grassfield:ro" -v "$PWD/apps/all:/apps:ro" -v "$PWD/out:/out" \
             "$IMAGE" bash -euo pipefail -c '
               trap "mkdir -p /out/build-stats; cp -r /build/stats/. /out/build-stats/ 2>/dev/null; cp /build/build.log /out/build.log 2>/dev/null || true" EXIT
               export GNUPGHOME=$(mktemp -d)
@@ -136,7 +150,7 @@ jobs:
                 --quick-gen-key "Grassfield CI build (throwaway) <ci@grassfield.invalid>" ed25519 sign 14d 2>/dev/null
               key=$(gpg --with-colons --list-keys | awk -F: "\$1==\"fpr\" {print \$10; exit}")
               /packages/scripts/build-channel.sh --source /grassfield --ref "$REF" --tree /out/tree \
-                --gnupghome "$GNUPGHOME" --key "$key" ${PKGREL:+--pkgrel "$PKGREL"}
+                --gnupghome "$GNUPGHOME" --key "$key" --apps /apps ${PKGREL:+--pkgrel "$PKGREL"}
               gpg --export "$key" >/out/build-signing-key.gpg
               /packages/scripts/check-tree.sh --tree /out/tree --keyring /out/build-signing-key.gpg'
       # The container wrote out/: a symlink there must not take a file of this runner into the (public) job summary. Only

@@ -209,7 +209,7 @@ def tag_problems(doc):
     """A run that can reach the release job refuses a commit that is not on grassfield's main, before it builds."""
     out = []
     steps = doc["jobs"]["build"]["steps"]
-    docker = [i for i, s in enumerate(steps) if "docker run" in str(s.get("run", ""))]
+    docker = [i for i, s in enumerate(steps) if "docker run" in str(s.get("run", "")) and "build-channel.sh" in str(s.get("run", ""))]
     checkout = [i for i, s in enumerate(steps) if (s.get("with") or {}).get("repository") == "grassfieldhq/grassfield"]
     guard = [i for i, s in enumerate(steps) if "merge-base --is-ancestor" in str(s.get("run", ""))]
     if len(guard) != 1 or not docker or len(checkout) != 1:
@@ -480,7 +480,7 @@ class MutationsAreCaught(Guards):
             s = steps(d)
             g = find(d)
             s.remove(g)
-            s.insert(next(i for i, x in enumerate(s) if "docker run" in str(x.get("run", ""))) + 1, g)
+            s.insert(next(i for i, x in enumerate(s) if "docker run" in str(x.get("run", "")) and "build-channel.sh" in str(x.get("run", ""))) + 1, g)
         self.caught(tag_problems, mutated(moved), "build.yml")
 
         def shallow(d):
@@ -497,7 +497,7 @@ class MutationsAreCaught(Guards):
 
         def build_other(d):
             for s in steps(d):
-                if "docker run" in str(s.get("run", "")):
+                if "docker run" in str(s.get("run", "")) and "build-channel.sh" in str(s.get("run", "")):
                     s["env"]["REF"] = "${{ inputs.ref }}-evil"
         self.caught(tag_problems, mutated(build_other), "build.yml")
 
