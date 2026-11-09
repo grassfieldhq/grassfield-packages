@@ -52,15 +52,16 @@ reason=$(pacman -Qi grassfield-keyring 2>/dev/null | sed -n 's/^Install Reason *
 expect "pacman -S grassfield-desktop, -compositor and -icons from the $channel channel (signatures required); grassfield-keyring: ${reason:-not installed}" \
   bash -c "pacman -Q grassfield-desktop grassfield-compositor grassfield-icons >/dev/null && [[ '$reason' == 'Installed as a dependency for another package' ]]"
 pacman -Q grassfield-desktop grassfield-compositor grassfield-icons grassfield-keyring 2>/dev/null | sed 's/^/   /'
-# The bundled apps (grassfield ADR-0055): grassfield-desktop depends on `sanaga`, which grassfield-sanaga provides (the channel
-# holds only grassfield-* names, ADR-0033 b.6), and on grassfield-notes. A ref from before that ADR has no such depends: the
-# apps are then installed here by name, so this test installs them from the channel either way.
+# The bundled apps (grassfield ADR-0055): grassfield-desktop depends on grassfield-sanaga and grassfield-notes by those names
+# (the channel holds only grassfield-* names, ADR-0033 b.6). So the installation of grassfield-desktop above must have brought
+# both: that proves its depends resolve from the channel. A ref from before that ADR has no such depends: the apps are then
+# installed here by name, so this test installs them from the channel either way.
 desktop_deps=$(pacman -Qi grassfield-desktop 2>/dev/null | sed -n 's/^Depends On *: //p')
-if [[ " $desktop_deps " == *" sanaga "* && " $desktop_deps " == *" grassfield-notes "* ]]; then
-  expect "grassfield-desktop's depends brought grassfield-sanaga (as sanaga's provider) and grassfield-notes, as dependencies" \
+if [[ " $desktop_deps " == *" grassfield-sanaga "* && " $desktop_deps " == *" grassfield-notes "* ]]; then
+  expect "grassfield-desktop's depends (grassfield-sanaga, grassfield-notes) resolved from the channel: both installed as dependencies" \
     bash -c "pacman -Qi grassfield-sanaga grassfield-notes | sed -n 's/^Install Reason *: //p' | grep -cx 'Installed as a dependency for another package' | grep -qx 2"
 else
-  echo "NOTE: this grassfield-desktop does not depend on sanaga and grassfield-notes (a ref from before ADR-0055): installing them by name"
+  echo "NOTE: this grassfield-desktop does not depend on grassfield-sanaga and grassfield-notes (a ref from before ADR-0055): installing them by name"
   pacman -Sy --noconfirm grassfield-sanaga grassfield-notes >>"$log" 2>&1
 fi
 expect "the apps' contract: /usr/bin/sanaga, /usr/bin/grassfield-notes, their .desktop files and hicolor icons, sanaga provided by grassfield-sanaga" \
