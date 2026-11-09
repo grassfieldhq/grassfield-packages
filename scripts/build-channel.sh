@@ -219,6 +219,9 @@ ingest_app() { # package folder name -> its package in /build/apps/<name>/, sign
   how=$("$here/scripts/app-ingest.sh" "$name" "${apps_dir:-/nonexistent}" "$tree" "$work" 2>>"$log") || { tail -n 5 "$log"; die "$name (see $log)"; }
   av=$(bash -c 'source "$1/PKGBUILD" >/dev/null 2>&1; printf %s-%s "$pkgver" "$pkgrel"' _ "$here/$name")
   pkg=$work/$name-$av-x86_64.pkg.tar.zst
+  # The second pass: the file is repacked again HERE, where it will be signed, and must equal its own repack byte for byte, so
+  # the signed file does not depend on the repack container alone (scripts/app-reverify.sh).
+  "$here/scripts/app-reverify.sh" --app "$name" --in "$pkg" >>"$log" 2>&1 || { tail -n 5 "$log"; die "$name is not its own canonical repack (see $log)"; }
   if [[ $how == reused* ]]; then
     signer=$(gpg --homedir "$gnupghome" --batch --no-tty --status-fd 1 --verify "$pkg.sig" "$pkg" 2>>"$log" |
       awk '$2 == "VALIDSIG" { print $12 }' || true)

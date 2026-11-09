@@ -14,7 +14,9 @@
 # (read-only) and --out. It starts as root and does only this as root: copy the file, drop every privilege and capability
 # (setpriv: uid and gid 65534, no groups, no capabilities, no_new_privs), and install the one result file into --out. Everything
 # that parses the untrusted file (zstd, bsdtar, find, getfattr) runs unprivileged. The steps of that second stage:
-#   0. magic bytes: a zstd frame, and behind it a tar header (ustar or pax), before any other reader sees the file.
+#   0. which format is parsed: zstd alone decompresses the file to a plain one (under a size cap), and that must BE a tar: a
+#      valid checksum on the first 512-byte header and "ustar" at offset 257 (so libarchive's tar reader is the highest
+#      bidder and no cpio, zip, 7-Zip or further compression is ever handed to it); GNU tar must list the same members.
 #   1. `bsdtar -tf` lists the members: no path twice (.PKGINFO included), every path one of the app's own, with every segment
 #      of only [A-Za-z0-9._@+-] (scripts/app-lib.sh: no space, control byte, newline or invalid UTF-8 in a name); the owners and
 #      modes libarchive prints are root:root, plain, no setuid, setgid or sticky bit, no group or world write.
@@ -85,23 +87,36 @@ fi
 mkdir "$work/tree" "$work/proof" "$work/pb"
 tree=$work/tree
 
-# 0. Magic bytes, before any other reader.
+# 0. Which format gets parsed at all. libarchive reads whatever its readers bid highest for (cpio, zip, 7-Zip, ISO, RAR...,
+# and compressed forms of them), so a package is decompressed here, by zstd alone, to a plain file, and that file must BE a
+# tar: a size that is a multiple of 512 under a cap, a first 512-byte block whose checksum is valid and whose magic at offset 257
+# is "ustar" (a valid tar header makes the tar reader the highest bidder), so nothing else, and no further compression, is ever
+# handed to libarchive. GNU tar must then agree with libarchive about the members (step 1b).
 [[ $(head -c 4 "$in" | od -An -tx1 | tr -d ' \n') == 28b52ffd ]] || die "not a zstd frame"
-hdr=$(zstd -dc -- "$in" 2>/dev/null | head -c 512 | tail -c +258 | head -c 5 || true)
-[[ $hdr == ustar ]] || die "not a tar archive of the ustar or pax family behind the zstd frame"
+limit=$((1 << 30))
+plain=$work/plain.tar
+{ zstd -d -q --no-progress -c -- "$in" 2>/dev/null | head -c "$limit" >"$plain"; } || true
+size=$(stat -c %s "$plain")
+((size >= 1024 && size < limit && size % 512 == 0)) || die "not a plain tar behind the zstd frame (decompressed size $size)"
+[[ $(head -c 262 "$plain" | tail -c 5) == ustar ]] || die "the decompressed file is not a tar of the ustar or pax family (no ustar magic at offset 257)"
+want=$(head -c 154 "$plain" | tail -c 6)
+have=$(od -An -v -tu1 -N512 "$plain" | awk '{ for (i = 1; i <= NF; i++) { n++; v = $i; if (n > 148 && n <= 156) v = 32; s += v } } END { print s }')
+[[ $want =~ ^[0-7]{6}$ ]] && ((8#$want == have)) || die "the first tar header's checksum is not valid: not a tar archive"
 
 # 1. The members, as libarchive lists them.
-list=$(bsdtar -tf "$in") || die "unreadable"
+list=$(bsdtar -tf "$plain") || die "unreadable"
 dups=$(printf '%s\n' "$list" | sort | uniq -d)
 [[ -z $dups ]] || die "a path listed twice: $(head -n 1 <<<"$dups")"
 while IFS= read -r p; do
   app_path_ok "$app" "$p" || die "a path that is not this app's, or with a character outside [A-Za-z0-9._@+-]: $p"
 done <<<"$list"
-bad=$(bsdtar -tvf "$in" | awk '$1 !~ /^[-d][r-][w-][x-][r-]-[x-][r-]-[x-]$/ || $3 != "root" || $4 != "root" { print $1, $3, $4, $9 }' | head -n 1)
+# 1b. An independent reader, GNU tar, lists the same members (a tar polyglot that libarchive reads as something else fails here).
+[[ $(tar -tf "$plain" 2>/dev/null | sort) == "$(printf '%s\n' "$list" | sort)" ]] || die "GNU tar and libarchive do not list the same members"
+bad=$(bsdtar -tvf "$plain" | awk '$1 !~ /^[-d][r-][w-][x-][r-]-[x-][r-]-[x-]$/ || $3 != "root" || $4 != "root" { print $1, $3, $4, $9 }' | head -n 1)
 [[ -z $bad ]] || die "not a regular file or folder, not owned by root, a setuid, setgid or sticky bit, or a group- or world-writable mode: $bad"
 
 # 2. Extracted by libarchive: -p BEFORE the --no-* flags (after them it would switch xattrs, ACLs and flags back on).
-bsdtar -x -f "$in" -C "$tree" -p --no-xattrs --no-acls --no-fflags --no-same-owner || die "bsdtar cannot extract it"
+bsdtar -x -f "$plain" -C "$tree" -p --no-xattrs --no-acls --no-fflags --no-same-owner || die "bsdtar cannot extract it"
 
 # 3. The tree, on the filesystem itself.
 cd "$tree"
