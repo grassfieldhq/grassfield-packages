@@ -81,6 +81,19 @@ if [[ $mode == prepare ]]; then
   k=$(ls ./grassfield-keyring-*.pkg.tar.zst 2>/dev/null | head -n 1)
   [[ -n $k ]] || die "$release holds no grassfield-keyring"
   "$self/keyring-check.sh" "$k" "$keyring" || die "${k#./} is not keyring/'s"
+  # The bundled apps this release ships, built or published, are the PKGBUILDs in git (scripts/app-check.sh): a published
+  # package of the same name replaced the new build above after a signature check only, so a PKGBUILD changed without a
+  # new pkgrel (new depends, another pin) would ship the old package after the new one was tested. Refused here.
+  for app in grassfield-sanaga grassfield-notes; do
+    mapfile -t found < <(ls ./"$app"-[0-9]*-x86_64.pkg.tar.zst 2>/dev/null)
+    ((${#found[@]} <= 1)) || die "$release holds more than one $app"
+    if ((${#found[@]} == 1)); then
+      "$self/app-check.sh" "${found[0]}" "$self/../$app" || die "${found[0]#./} is not what $app/PKGBUILD builds (a changed PKGBUILD is a new pkgrel)"
+      echo "${found[0]#./}: $app/PKGBUILD's package"
+    else
+      echo "NOTE: $release holds no $app"
+    fi
+  done
   work=$(mktemp -d)
   repo-add --quiet "$work/grassfield.db.tar.gz" "${packages[@]}" >/dev/null || die "repo-add"
   cp -L "$work/grassfield.db.tar.gz" grassfield.db
