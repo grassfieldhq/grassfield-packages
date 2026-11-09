@@ -141,7 +141,11 @@ depends on them (grassfield ADR-0055).
   built.
   A second pass follows where the package is signed: `scripts/app-reverify.sh`, in the desktop's container (the same image), repacks
   the repacked file again and requires it to be identical byte for byte (the repack is deterministic, so a canonical package is
-  its own fixed point), so the signed file does not depend on the repack container alone.
+  its own fixed point), so the signed file does not depend on the repack container alone. It is a second pass of the same script with the same
+  libarchive, **not an independent parser**: it catches tampering and logic slips, not an exploit that works twice. After each
+  unprivileged stage every process of uid 65534 is killed before root reads the output; step 0 also asks libarchive itself
+  (`bsdtar -tvvf`: an uncompressed POSIX ustar or pax tar, because libarchive decides on decompression before the format) and
+  requires GNU tar to read the file with exit status 0; a zstd failure is an error.
   Only that repacked file goes on: `build-channel.sh --apps DIR` takes it through `scripts/app-ingest.sh` and `scripts/app-check.sh`
   (a second check: pinned PKGBUILD, the same paths, no path or `.PKGINFO`, `.BUILDINFO` or `.MTREE` member twice, root owner and
   plain modes, one line for each single-valued `.PKGINFO` key, the PKGBUILD's own dependency lines, a `.BUILDINFO` recording

@@ -886,7 +886,22 @@ class Repack(unittest.TestCase):
         poly += b"\0" * (-len(poly) % 512)
         self.assertEqual(poly[257:262], b"ustar")
         gz_tar = subprocess.run(["gzip", "-c", "-n"], input=tar_bytes, capture_output=True).stdout
-        cases = {"cpio in gzip in zstd": gz_cpio, "the polyglot gzip with ustar at 257": poly, "a gzip tar in zstd": gz_tar,
+        def both_headers(inner, plain):
+            """Sixth check: a first 512-byte block that is a valid tar header (checksum, ustar at 257) AND a gzip header whose
+            FEXTRA field spans the rest of the block; then the gzip data of `inner`; then a plain tar. libarchive gunzips it
+            (it decides on compression before the format); GNU tar reads the header as tar and then fails."""
+            block = bytearray(tar_block("PaxHeader/x", b"", typeflag=b"x"))
+            block[0:10] = b"\x1f\x8b\x08\x04\0\0\0\0\0\xff"
+            block[10:12] = struct.pack("<H", 500)
+            block[148:156] = b" " * 8
+            block[148:156] = f"{sum(block):06o}\0 ".encode()
+            c = zlib.compressobj(9, zlib.DEFLATED, -15)
+            gz_data = c.compress(inner) + c.flush() + struct.pack("<II", zlib.crc32(inner), len(inner))
+            gz_data += b"\0" * (-len(gz_data) % 512)
+            return bytes(block) + gz_data + plain
+        cases = {"the both-headers polyglot around a cpio": both_headers(cpio, tar_bytes),
+                 "the both-headers polyglot around a gzipped tar": both_headers(tar_bytes, tar_bytes),
+                 "cpio in gzip in zstd": gz_cpio, "the polyglot gzip with ustar at 257": poly, "a gzip tar in zstd": gz_tar,
                  "a cpio in zstd": cpio, "a zip in zstd": subprocess.run(["bsdtar", "--format", "zip", "-cf", "-", "-C", str(cpio_src), "usr"], capture_output=True).stdout,
                  "a tar with a bad header checksum": tar_bytes[:148] + b"000001\0 " + tar_bytes[156:]}
         for why, data in cases.items():
@@ -899,6 +914,26 @@ class Repack(unittest.TestCase):
         r = self.repack(good)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(members[0][0], ".BUILDINFO")
+        # The refusal is libarchive's own report or GNU tar's exit status, not only a later rule.
+        poly = self.zstd_of("which_reader", both_headers(cpio, tar_bytes))
+        r = self.repack(poly)
+        self.assertRegex(r.stderr, r"libarchive does not read the plain file as an uncompressed POSIX tar|GNU tar cannot read|checksum")
+
+    def test_step_zero_reads_libarchives_own_report_and_gnu_tars_exit_status_and_zstds(self):
+        body = text("scripts/app-repack.sh")
+        self.assertIn("bsdtar -tvvf", body)
+        self.assertIn("POSIX\\ pax\\ interchange\\ format|POSIX\\ ustar\\ format", body)
+        self.assertIn("Compression:\\ none", body)
+        self.assertIn('gnu=$(tar -tf "$plain" 2>/dev/null) || die', body)
+        self.assertIn("zstd_status=${PIPESTATUS[0]}", body)
+        self.assertNotRegex(code(body), r"zstd -d[^\n]*\|\|\s*true")  # a zstd failure is no longer swallowed
+        self.assertIn("pkill -KILL -u 65534", body)
+        self.assertLess(body.index("pkill -KILL -u 65534"), body.index('install -m644 "$work/$file" "$out/$file"'))
+        reverify = text("scripts/app-reverify.sh")
+        self.assertNotIn("cmp", code(reverify))  # the check container has no cmp
+        self.assertIn("sha256sum", code(reverify))
+        self.assertIn("not an independent parser", reverify)
+        self.assertIn("not an independent", text("README.md"))
 
     def test_the_first_header_must_be_a_valid_tar_header(self):
         body = text("scripts/app-repack.sh")
