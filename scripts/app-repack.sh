@@ -85,7 +85,10 @@ if [[ $stage == root ]]; then
     pkill -KILL -u 65534 || true
     # (A zombie is no process that can act: in a container whose PID 1 reaps nothing an exited child of the stage stays listed
     # as Z, and must not refuse every later repack.)
-    if ps -u 65534 -o stat= 2>/dev/null | grep -q '^[^Z]'; then die "a process of the unprivileged user survives"; fi
+    # The list is read in full before it is searched: `ps | grep -q` under pipefail takes ps's SIGPIPE status when grep stops at
+    # the first match, and the test would then pass on exactly the case it must refuse.
+    survivors=$(ps -u 65534 -o stat= 2>/dev/null || true)
+    if grep -q '^[^Z]' <<<"$survivors"; then die "a process of the unprivileged user survives"; fi
     ((rc == 0)) || exit "$rc"
   fi
   [[ -f $work/$file && ! -L $work/$file ]] || die "the unprivileged stage wrote no $file"
@@ -121,8 +124,10 @@ have=$(od -An -v -tu1 -N512 "$plain" | awk '{ for (i = 1; i <= NF; i++) { n++; v
 [[ $want =~ ^[0-7]{6}$ ]] && ((8#$want == have)) || die "the first tar header's checksum is not valid: not a tar archive"
 
 # Before ANY libarchive call: the first header's name field (bytes 0-99, up to the NUL) must be one of the app's own paths. No filter
-# or format signature (gzip, bzip2, xz, lzma, lzip, lz4, zstd, lzop, compress, uuencode, rpm, cpio, zip, 7-Zip...) can also be a valid
-# first member name such as .BUILDINFO or usr/, so the probe below cannot be made to read something else.
+# or format signature that libarchive looks for at offset 0 (gzip, bzip2, xz, lzma, lzip, lz4, zstd, lzop, compress, rpm, cpio,
+# zip, 7-Zip...) can also be a valid first member name such as .BUILDINFO or usr/. This check does NOT rule out the uuencode filter:
+# its bidder scans lines for "begin " instead of reading a fixed offset. If it ever won the bid, libarchive's footer would read
+# "Compression: uu" and the footer check below, which accepts only "Compression: none", refuses the file.
 first=$(head -c 100 "$plain" | tr '\0' '\n' | head -n 1)
 app_path_ok "$app" "$first" || die "the first member's name is not one of this app's paths (not a package of ours: $(printf %q "${first:0:40}"))"
 # libarchive decides on decompression before it looks at the format, so a first block that is both a tar header and a gzip header

@@ -1062,7 +1062,10 @@ class Repack(unittest.TestCase):
         self.assertNotIn("<(", user_stage)  # no process substitution: no child left behind when the stage dies
         self.assertNotRegex(user_stage, r"&\s*$|\bcoproc\b|\bdisown\b|\bnohup\b")
         self.assertNotIn("<(", code(text("scripts/app-check.sh")))
-        self.assertIn("ps -u 65534 -o stat= 2>/dev/null | grep -q '^[^Z]'", body)
+        # The list is read in full, then searched: `ps | grep -q` under pipefail takes ps's SIGPIPE status when grep stops early.
+        self.assertIn("survivors=$(ps -u 65534 -o stat= 2>/dev/null || true)", body)
+        self.assertIn("if grep -q '^[^Z]' <<<\"$survivors\"; then die", body)
+        self.assertNotRegex(code(body), r"\bps\b[^\n]*\|\s*grep -q")
         self.assertNotIn("pgrep", code(body))
 
     def test_the_first_header_name_is_checked_before_any_libarchive_call(self):
