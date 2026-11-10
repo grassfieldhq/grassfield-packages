@@ -106,7 +106,8 @@ depends on them (grassfield ADR-0055).
   `scripts/app-repack.sh` runs in a third container, with no network and only this repository, the package (read-only) and
   an output folder:
   0. which format is parsed (before any libarchive call the first header's name must itself be one of the app's paths: no
-     filter or format signature can be one, so the probe below cannot be made to read something else): zstd alone decompresses the file to a plain one (under a size cap) and that must BE a tar, a valid
+     filter or format signature read at offset 0 can be one; the uuencode filter, found by a line scan, can still win the bid,
+     and libarchive's footer check refuses it as "Compression: uu"): zstd alone decompresses the file to a plain one (under a size cap) and that must BE a tar, a valid
      checksum on its first 512-byte header and `ustar` at offset 257 (libarchive reads whatever format bids highest: a cpio, zip or
      7-Zip file, or a compressed one, named `.pkg.tar.zst` must never reach it); GNU tar must list the same members;
   1. `bsdtar -tf` lists the members: no path twice (`.PKGINFO` included), every path the app's own
