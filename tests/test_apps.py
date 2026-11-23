@@ -48,12 +48,12 @@ class Pins(unittest.TestCase):
 
     def test_the_commit_is_a_full_sha_and_the_source_is_its_archive(self):
         pins = {"grassfield-sanaga": "67b0296660c8204d0e25ee98849de92eb8aa8749",
-                "grassfield-notes": "2daf1c887a93e7a0931626194546bb88b0aeffe8"}
+                "grassfield-notes": "0fcc1fdd80f60679b28fc004436d594b07ec8726"}
         for app in APPS:
             with self.subTest(app):
                 commit = var(app, "_commit")
                 self.assertRegex(commit, r"^[0-9a-f]{40}$")
-                self.assertEqual(commit, pins[app], "the pinned commit (2026-11-09; Sanaga 0.6.0 with its review fixes 2026-11-23): a bump changes it on purpose")
+                self.assertEqual(commit, pins[app], "the pinned commits (Sanaga 0.6.0 with its review fixes, Notes with the clipboard fix and audit, 2026-11-23): a bump changes it on purpose")
                 source = pkgbuild_vars(app, "source").strip()
                 self.assertEqual(len(source.splitlines()), 1)
                 self.assertRegex(source, rf"^{app}-{commit}\.tar\.gz::https://github\.com/grassfieldhq/[a-z-]+/archive/{commit}\.tar\.gz$")
@@ -187,9 +187,11 @@ class PinCheck(unittest.TestCase):
 
     def test_every_way_to_bring_other_bytes_or_code_is_refused(self):
         sha = "b" * 64
+        pin = var("grassfield-notes", "_commit")
         cases = {
             "SKIP": ({"sha256sums=('": "sha256sums=('SKIP' '"}, ""),
-            "a short commit": ({"_commit=2daf1c88": "_commit=2daf1c8\n#"}, ""),
+            # The pinned commit cut to 7 digits (the rest commented out), whatever the pin is.
+            "a short commit": ({f"_commit={pin[:8]}": f"_commit={pin[:7]}\n#"}, ""),
             # Mutant M4 of the review: makepkg honours the architecture-suffixed arrays.
             "a per-architecture git source": ("", "source_x86_64=('extra::git+https://example.invalid/x#branch=main')\n"
                                                   "sha256sums_x86_64=('SKIP')\n"),
