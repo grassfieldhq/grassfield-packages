@@ -47,13 +47,13 @@ class Pins(unittest.TestCase):
     """The source is one commit by its full SHA with a real checksum, never a tag, a branch or SKIP."""
 
     def test_the_commit_is_a_full_sha_and_the_source_is_its_archive(self):
-        pins = {"grassfield-sanaga": "a9e0e561bfc8105efa5d9d56844c1c18034d04fd",
+        pins = {"grassfield-sanaga": "67b0296660c8204d0e25ee98849de92eb8aa8749",
                 "grassfield-notes": "2daf1c887a93e7a0931626194546bb88b0aeffe8"}
         for app in APPS:
             with self.subTest(app):
                 commit = var(app, "_commit")
                 self.assertRegex(commit, r"^[0-9a-f]{40}$")
-                self.assertEqual(commit, pins[app], "the owner's pin of 2026-11-09 (a bump changes it on purpose)")
+                self.assertEqual(commit, pins[app], "the pinned commit (2026-11-09; Sanaga 0.6.0 with its review fixes 2026-11-23): a bump changes it on purpose")
                 source = pkgbuild_vars(app, "source").strip()
                 self.assertEqual(len(source.splitlines()), 1)
                 self.assertRegex(source, rf"^{app}-{commit}\.tar\.gz::https://github\.com/grassfieldhq/[a-z-]+/archive/{commit}\.tar\.gz$")
@@ -98,7 +98,7 @@ class Pins(unittest.TestCase):
     def test_runtime_and_build_dependencies(self):
         sanaga = pkgbuild_vars("grassfield-sanaga", "depends").split()
         for needed in ("gtk4", "webkitgtk-6.0", "bubblewrap", "xdg-dbus-proxy", "gst-libav", "gst-plugins-bad",
-                       "gst-plugins-good", "libsecret", "wayland", "libxkbcommon", "libglvnd"):
+                       "gst-plugins-good", "libsecret", "wayland", "libxkbcommon", "libglvnd", "libnice"):
             self.assertIn(needed, sanaga)
         notes = pkgbuild_vars("grassfield-notes", "depends").split()
         for needed in ("wayland", "libxkbcommon", "libglvnd"):  # eframe's winit and glow open these at run time
@@ -862,6 +862,19 @@ class Repack(unittest.TestCase):
                     "usr/share/licenses/grassfield-notes/x\ty", "usr/share/licenses/grassfield-notes/\u00e9", "usr/bin/snapper", "/usr/bin/grassfield-notes",
                     "usr/share/licenses/grassfield-notes//x", "usr/share/.hidden/", "usr/.PKGINFO", ".INSTALL", ""):
             self.assertEqual(rule(bad), 1, repr(bad))
+
+    def test_only_sanagas_page_helper_is_allowed_under_usr_lib(self):
+        """Sanaga 0.6 installs one helper library, usr/lib/sanaga/libsanaga_page_helper.so (WebKit's page processes load it);
+        nothing else under usr/lib, and Notes has none."""
+        rule = lambda app, path: subprocess.run(["bash", "-c", 'source "$1"; app_path_ok "$2" "$3"', "_", str(ROOT / "scripts" / "app-lib.sh"), app, path]).returncode
+        for ok in ("usr/lib/", "usr/lib/sanaga/", "usr/lib/sanaga/libsanaga_page_helper.so"):
+            self.assertEqual(rule("grassfield-sanaga", ok), 0, ok)
+        for bad in ("usr/lib/sanaga/other.so", "usr/lib/libsanaga_page_helper.so", "usr/lib/sanaga/libsanaga_page_helper.so/",
+                    "usr/lib/sanaga/x/libsanaga_page_helper.so", "usr/lib/grassfield-notes/libsanaga_page_helper.so", "usr/lib64/sanaga/",
+                    "usr/lib/systemd/", "usr/lib/sanaga/.libsanaga_page_helper.so"):
+            self.assertEqual(rule("grassfield-sanaga", bad), 1, bad)
+        for bad in ("usr/lib/", "usr/lib/grassfield-notes/", "usr/lib/sanaga/libsanaga_page_helper.so"):
+            self.assertEqual(rule("grassfield-notes", bad), 1, bad)
 
     def zstd_of(self, why, data):
         """A file named as the package, holding `data` under a zstd frame, in its own folder."""
