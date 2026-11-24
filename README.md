@@ -60,7 +60,7 @@ depends on them (grassfield ADR-0055).
 
 | Folder | Package | Provides | Installs |
 |---|---|---|---|
-| `grassfield-sanaga/` | `grassfield-sanaga` | `sanaga` (and `conflicts=(sanaga)`) | `/usr/bin/sanaga`, `sanaga.desktop`, hicolor icons, metainfo |
+| `grassfield-sanaga/` | `grassfield-sanaga` | `sanaga` (and `conflicts=(sanaga)`) | `/usr/bin/sanaga`, `/usr/lib/sanaga/libsanaga_page_helper.so`, `sanaga.desktop`, hicolor icons, metainfo |
 | `grassfield-notes/` | `grassfield-notes` | nothing | `/usr/bin/grassfield-notes`, `grassfield-notes.desktop`, hicolor icons |
 
 - **The name.** The channel holds only `grassfield-*` packages, none with `replaces=` (ADR-0033 b.6, unchanged), so the
@@ -111,7 +111,8 @@ depends on them (grassfield ADR-0055).
      checksum on its first 512-byte header and `ustar` at offset 257 (libarchive reads whatever format bids highest: a cpio, zip or
      7-Zip file, or a compressed one, named `.pkg.tar.zst` must never reach it); GNU tar must list the same members;
   1. `bsdtar -tf` lists the members: no path twice (`.PKGINFO` included), every path the app's own
-     (`scripts/app-lib.sh`: `usr/bin/<its binary>` alone, its `.desktop`, its hicolor icons, its metainfo, its licences
+     (`scripts/app-lib.sh`: `usr/bin/<its binary>` alone, its `.desktop`, its hicolor icons, its metainfo, its one
+     helper library under `usr/lib/<its binary>/` (Sanaga's page helper, loaded by WebKit's page processes), its licences
      folder; no `.INSTALL`, no hook, no other binary, no `usr/share/doc`), every segment of only `[A-Za-z0-9._@+-]` (no space,
      control byte, newline or invalid UTF-8: libalpm writes a name raw into its database, one per line), every owner and mode
      as libarchive prints them;
@@ -159,7 +160,8 @@ depends on them (grassfield ADR-0055).
   `update-desktop-database` (`usr/share/applications/*.desktop`, writes `mimeinfo.cache` from the `MimeType=` lines). Both are
   stock Arch hooks that every desktop application triggers, parse the app's PNG, SVG and `.desktop` data with their own
   parsers and write only their caches; accepted. No path of the allowlist matches the hooks for MIME packages, fonts, schemas,
-  AppStream catalogs (`usr/share/swcatalog`, not `usr/share/metainfo`), systemd, udev, depmod or ldconfig, and the system-wide
+  AppStream catalogs (`usr/share/swcatalog`, not `usr/share/metainfo`), systemd, udev, depmod or ldconfig (Sanaga's helper
+  is in `usr/lib/sanaga/`, a folder the linker's cache never reads), and the system-wide
   hooks that fire for every package (`Target = *`, such as Omarchy's update guard) never read a package's contents.
 - **Reuse.** A package of the same name already in the tree is used again, with its signature, only if the key signed it and
   `app-check.sh` finds it built from this very `PKGBUILD`; a changed `PKGBUILD` without a new `pkgrel` stops the build, and so

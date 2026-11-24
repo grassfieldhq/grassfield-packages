@@ -17,9 +17,9 @@
 # commit; the count keeps versions ordered along main). prepare() refuses a PKGBUILD whose _cargover is not the source's.
 # Any other change to this file is a new pkgrel: a package file name never changes content (scripts/build-channel.sh).
 _app=sanaga
-_cargover=0.4.0
-_rev=79
-_commit=a9e0e561bfc8105efa5d9d56844c1c18034d04fd
+_cargover=0.6.0
+_rev=204
+_commit=67b0296660c8204d0e25ee98849de92eb8aa8749
 pkgname=grassfield-sanaga
 pkgver=${_cargover}.r${_rev}.g${_commit:0:7}
 pkgrel=1
@@ -30,7 +30,8 @@ license=(MIT)
 # packaging/DISTRIBUTIONS.md of the pinned source: the window and the engine, the engine's page sandbox (without bubblewrap
 # and xdg-dbus-proxy pages run unsandboxed: a default browser must depend on both), the codecs (so Sanaga never offers to
 # install them: SANAGA_DISTRO below), the system keyring (secret-tool), xdg-utils. wayland, libxkbcommon and libglvnd are
-# what eframe's winit and glow open at run time (dlopen, so the binary's NEEDED list does not show them).
+# what eframe's winit and glow open at run time (dlopen, so the binary's NEEDED list does not show them). 0.6: libnice for
+# video calls (WebRTC's ICE through GStreamer); the channel follows Arch, whose GTK and WebKitGTK are above 0.6's floors.
 depends=(
   gtk4
   webkitgtk-6.0
@@ -43,6 +44,7 @@ depends=(
   gst-plugins-bad
   gst-libav
   gst-plugin-va
+  libnice
   libsecret
   xdg-utils
   wayland
@@ -61,7 +63,7 @@ conflicts=(sanaga)
 # makepkg's link-time optimisation breaks the C parts of Rust crates; the debug package is not part of the channel.
 options=(!lto !debug)
 source=("$pkgname-$_commit.tar.gz::https://github.com/grassfieldhq/$_app/archive/$_commit.tar.gz")
-sha256sums=('bf0ee5326e7fa40ae4481ffbb9489526cf2759ae80b45774eef6f6a94f5d7b9b')
+sha256sums=('cc2b28403a10bf452e87b5756a7265b4b7a3800d421ec6bb28a1952462ab92b0')
 
 prepare() {
   cd "$srcdir/$_app-$_commit"
@@ -115,6 +117,8 @@ _licenses() { # outdir
 package() {
   cd "$srcdir/$_app-$_commit"
   install -Dm755 target/release/sanaga "$pkgdir/usr/bin/sanaga"
+  # Loaded by WebKit's page processes: which process serves which tab (the Activity page). Sanaga looks in ../lib/sanaga.
+  install -Dm644 target/release/libsanaga_page_helper.so "$pkgdir/usr/lib/sanaga/libsanaga_page_helper.so"
   install -Dm644 packaging/sanaga.desktop "$pkgdir/usr/share/applications/sanaga.desktop"
   install -Dm644 packaging/sanaga.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/sanaga.svg"
   local s

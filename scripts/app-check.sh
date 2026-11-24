@@ -11,7 +11,8 @@
 #     install=, no replaces=);
 #   - its paths are EXACTLY the app's own: .PKGINFO, .BUILDINFO, .MTREE; usr/bin/<the app's binary> alone; usr/share/
 #     applications/<its .desktop> alone; its hicolor icons (<binary>.png or .svg under hicolor/<size>/apps/); its metainfo
-#     file if it has one; and usr/share/licenses/<pkgname>/ with what is below. No .INSTALL (no scriptlet), no other binary
+#     file if it has one; its one helper library usr/lib/<binary>/<file> if it has one (Sanaga's page helper); and
+#     usr/share/licenses/<pkgname>/ with what is below. No .INSTALL (no scriptlet), no other binary
 #     (it would sit in PATH of the desktop's build and of a client's root commands), no hook, no usr/share/doc, no file
 #     elsewhere;
 #   - every member is a regular file or a folder, owned by root, with no setuid, setgid or sticky bit and no group- or
@@ -49,7 +50,7 @@ for member in .PKGINFO .BUILDINFO .MTREE; do
   [[ $(grep -cx -- "$member" <<<"$list") == 1 ]] || fail "not exactly one $member member"
 done
 while IFS= read -r p; do
-  app_path_ok "$name" "$p" || fail "a path that is not this app's (only usr/bin/$bin, usr/share/applications/$bin.desktop, its hicolor icons, its licences${meta:+, usr/share/metainfo/$meta}; no .INSTALL, no usr/share/doc): $p"
+  app_path_ok "$name" "$p" || fail "a path that is not this app's (only usr/bin/$bin, usr/share/applications/$bin.desktop, its hicolor icons, its licences${meta:+, usr/share/metainfo/$meta}${lib:+, usr/lib/$bin/$lib}; no .INSTALL, no usr/share/doc): $p"
 done <<<"$list"
 ! grep -qE ' -> | link to ' <<<"$verbose" || fail "a link among its entries: $(grep -m1 -E ' -> | link to ' <<<"$verbose")"
 bad=$(awk '$1 !~ /^[-d][r-][w-][x-][r-]-[x-][r-]-[x-]$/ || $3 != "root" || $4 != "root" { print $1, $3, $4, $9 }' <<<"$verbose" | head -n 1)

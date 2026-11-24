@@ -15,8 +15,8 @@
 # Any other change to this file is a new pkgrel: a package file name never changes content (scripts/build-channel.sh).
 _app=grassfield-notes
 _cargover=1.0.0
-_rev=24
-_commit=2daf1c887a93e7a0931626194546bb88b0aeffe8
+_rev=40
+_commit=0fcc1fdd80f60679b28fc004436d594b07ec8726
 pkgname=grassfield-notes
 pkgver=${_cargover}.r${_rev}.g${_commit:0:7}
 pkgrel=1
@@ -51,7 +51,7 @@ checkdepends=(git openssh)
 # makepkg's link-time optimisation breaks the C parts of Rust crates; the debug package is not part of the channel.
 options=(!lto !debug)
 source=("$pkgname-$_commit.tar.gz::https://github.com/grassfieldhq/$_app/archive/$_commit.tar.gz")
-sha256sums=('dfbe3160b5ec868225c0f7f26cac67c0132e7c9ce1ad92e83be2b746f4f90e75')
+sha256sums=('be2927407dcf3f09711340a9f9970bccc1f0f54ed8aa1424e67719c15b692f0a')
 
 prepare() {
   cd "$srcdir/$_app-$_commit"
